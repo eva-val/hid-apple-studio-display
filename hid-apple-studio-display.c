@@ -152,7 +152,7 @@ static bool asd_find_usage(struct hid_report *report, unsigned int usage,
 	for (i = 0; i < report->maxfield; i++) {
 		struct hid_field *f = report->field[i];
 
-		for (j = 0; j < f->maxusage; j++) {
+		for (j = 0; j < f->maxusage && j < f->report_count; j++) {
 			if (f->usage[j].hid != usage)
 				continue;
 			if (u) {
@@ -467,6 +467,7 @@ static void asd_orient_remove(struct hid_device *hdev)
 static int asd_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
 	struct hid_report *report;
+	struct hid_field *field;
 	struct asd_device *asd;
 	int ret;
 
@@ -486,13 +487,27 @@ static int asd_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	if (!asd)
 		return -ENOMEM;
 
+	asd_find_usage(report, ASD_USAGE_BRIGHTNESS, &asd->brightness);
+	field = asd->brightness.field;
+	/* Validate descriptor data before any report I/O or backlight work. */
+	if (!hid_report_len(report) ||
+	    asd->brightness.index >= field->report_count ||
+	    !field->report_size || field->report_size > 32 ||
+	    (u64)field->report_offset +
+		    (u64)field->report_count * field->report_size > report->size ||
+	    field->logical_minimum < 0 || field->logical_maximum <= 0 ||
+	    field->logical_minimum > field->logical_maximum ||
+	    (u64)field->logical_maximum >= (1ULL << field->report_size)) {
+		hid_err(hdev, "invalid brightness report\n");
+		return -EINVAL;
+	}
+
 	asd->buf = devm_kzalloc(&hdev->dev, hid_report_len(report), GFP_KERNEL);
 	if (!asd->buf)
 		return -ENOMEM;
 
 	asd->hdev = hdev;
 	asd->report = report;
-	asd_find_usage(report, ASD_USAGE_BRIGHTNESS, &asd->brightness);
 	asd_find_usage(report, ASD_USAGE_DURATION, &asd->duration);
 	mutex_init(&asd->lock);
 	INIT_DELAYED_WORK(&asd->register_work, asd_register_backlight);
