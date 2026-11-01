@@ -417,6 +417,10 @@ static int asd_orient_probe(struct hid_device *hdev)
 	report = asd_find_report(hdev, HID_INPUT_REPORT, ASD_USAGE_TILT_X);
 	if (!report)
 		return -ENODEV;
+	if (!hid_report_len(report)) {
+		hid_err(hdev, "invalid orientation report\n");
+		return -EINVAL;
+	}
 
 	indio_dev = devm_iio_device_alloc(&hdev->dev, sizeof(*o));
 	if (!indio_dev)
@@ -426,8 +430,21 @@ static int asd_orient_probe(struct hid_device *hdev)
 	o->hdev = hdev;
 	o->report = report;
 	for (i = 0; i < ARRAY_SIZE(usages); i++) {
+		struct hid_field *field;
+
 		if (!asd_find_usage(report, usages[i], &o->tilt[i]))
 			return -ENODEV;
+		field = o->tilt[i].field;
+		if (o->tilt[i].index >= field->report_count ||
+		    !field->report_size || field->report_size > 32 ||
+		    (u64)field->report_offset +
+			    (u64)field->report_count * field->report_size > report->size ||
+		    field->logical_minimum < 0 || field->logical_maximum <= 0 ||
+		    field->logical_minimum > field->logical_maximum ||
+		    (u64)field->logical_maximum >= (1ULL << field->report_size)) {
+			hid_err(hdev, "invalid orientation report\n");
+			return -EINVAL;
+		}
 	}
 	o->buf = devm_kzalloc(&hdev->dev, hid_report_len(report), GFP_KERNEL);
 	if (!o->buf)
