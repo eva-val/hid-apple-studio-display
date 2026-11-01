@@ -15,6 +15,7 @@ Requires:       gcc
 Requires:       make
 Requires:       kernel-devel
 Recommends:     python3-gobject
+Recommends:     python3-pyudev
 Recommends:     iio-sensor-proxy
 
 %description

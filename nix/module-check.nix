@@ -47,6 +47,10 @@ assert
 assert nixpkgs.lib.hasInfix "fade_ms=150 connector=DP-1" enabled.boot.extraModprobeConfig;
 assert !(enabled.systemd.user.services ? asd-autorotate);
 assert enabled.systemd.user.services.asd-gnome-rescan.after == [ "graphical-session.target" ];
+assert enabled.systemd.user.services.asd-gnome-rescan.serviceConfig.Type == "simple";
+assert nixpkgs.lib.hasSuffix " --watch"
+  enabled.systemd.user.services.asd-gnome-rescan.serviceConfig.ExecStart;
+assert !(nixpkgs.lib.hasInfix "SYSTEMD_USER_WANTS" enabled.services.udev.extraRules);
 assert builtins.elem "graphical-session.target"
   customKernel.systemd.user.services.asd-autorotate.wantedBy;
 assert nixpkgs.lib.hasInfix ''"--axis" "x"''

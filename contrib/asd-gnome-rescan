@@ -9,11 +9,15 @@ therefore gets no brightness slider until the display settings are applied
 again. This re-applies the current configuration unchanged through mutter's
 DisplayConfig D-Bus API (temporarily, so nothing is written to monitors.xml).
 
-Started by asd-gnome-rescan.service, which the udev rule pulls into the user's
-service manager whenever the backlight appears. Without a running GNOME
-session there is nothing to do and it exits quietly.
+With --watch, one session service handles startup, monitor configuration
+changes (including opening the lid), and backlight add/remove events. It waits
+for active connectors to be enabled before rescanning, and ignores the
+configuration-change notification caused by its own reapply. Without --watch,
+it remains a one-shot manual rescan.
 """
 
+import argparse
+from pathlib import Path
 import sys
 
 import gi
@@ -27,22 +31,9 @@ OBJECT_PATH = "/org/gnome/Mutter/DisplayConfig"
 KEPT_PROPS = {"color-mode": "u", "rgb-range": "u"}
 
 
-def main():
-    try:
-        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        if not bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus",
-                             "org.freedesktop.DBus", "NameHasOwner",
-                             GLib.Variant("(s)", (BUS_NAME,)), None,
-                             Gio.DBusCallFlags.NONE, -1, None).unpack()[0]:
-            return 0
-        proxy = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None,
-                                       BUS_NAME, OBJECT_PATH, BUS_NAME, None)
-        serial, monitors, logical, props = proxy.call_sync(
-            "GetCurrentState", None, Gio.DBusCallFlags.NONE, -1, None).unpack()
-    except GLib.Error as e:
-        print(f"GNOME display configuration not available: {e.message}", file=sys.stderr)
-        return 0
-
+def read_config(proxy):
+    serial, monitors, logical, props = proxy.call_sync(
+        "GetCurrentState", None, Gio.DBusCallFlags.NONE, 5000, None).unpack()
     current = {}
     for (conn, *_), modes, mon_props in monitors:
         mode = next((m[0] for m in modes if m[-1].get("is-current")), None)
@@ -51,6 +42,8 @@ def main():
 
     new_logical = []
     for x, y, scale, transform, primary, mons, _ in logical:
+        if any(m[0] not in current or current[m[0]][0] is None for m in mons):
+            raise RuntimeError("active monitor has no current mode yet")
         new_logical.append((x, y, scale, transform, primary,
                             [(m[0], *current[m[0]]) for m in mons]))
 
@@ -58,14 +51,132 @@ def main():
     if props.get("supports-changing-layout-mode") and "layout-mode" in props:
         config_props["layout-mode"] = GLib.Variant("u", props["layout-mode"])
 
+    return serial, new_logical, config_props
+
+
+def apply_config(proxy, config):
+    serial, logical, props = config
+    # method 1: temporary, the stored configuration stays as it is
+    proxy.call_sync(
+        "ApplyMonitorsConfig",
+        GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, logical, props)),
+        Gio.DBusCallFlags.NONE, 5000, None)
+
+
+def config_key(config):
+    # Serial changes on our own reapply too; only compare the actual layout.
+    return GLib.Variant("(a(iiduba(ssa{sv}))a{sv})", config[1:]).print_(False)
+
+
+def connectors_ready(config, drm_root=Path("/sys/class/drm")):
+    active = {monitor[0] for logical in config[1] for monitor in logical[5]}
+    for connector in active:
+        paths = list(drm_root.glob(f"card*-{connector}/enabled"))
+        # Virtual outputs need not have a sysfs connector.
+        if paths and not any(p.read_text().strip() == "enabled" for p in paths):
+            return False
+    return True
+
+
+class Watcher:
+    def __init__(self, proxy):
+        self.proxy = proxy
+        self.pending = 0
+        self.attempts = 0
+        self.backlight_generation = 0
+        self.handled = None
+
+    def schedule(self):
+        if self.pending:
+            GLib.source_remove(self.pending)
+        self.attempts = 0
+        self.pending = GLib.timeout_add(250, self.rescan)
+
+    def owner_changed(self, *_):
+        self.handled = None
+        self.schedule()
+
+    def monitor_changed(self, _proxy, _sender, signal, _parameters):
+        if signal == "MonitorsChanged":
+            self.schedule()
+
+    def backlight_changed(self, action):
+        # Brightness writes generate change events; never rescan for those.
+        if action in ("add", "remove"):
+            self.backlight_generation += 1
+            self.schedule()
+
+    def rescan(self):
+        self.pending = 0
+        if not self.proxy.get_name_owner():
+            return GLib.SOURCE_REMOVE
+        try:
+            config = read_config(self.proxy)
+            key = (config_key(config), self.backlight_generation)
+            if key == self.handled:
+                return GLib.SOURCE_REMOVE
+            if not config[1]:
+                self.handled = key
+                return GLib.SOURCE_REMOVE
+            if not connectors_ready(config):
+                raise RuntimeError("active DRM connectors are not enabled yet")
+            apply_config(self.proxy, config)
+            self.handled = key
+            print("Refreshed GNOME backlight mapping", flush=True)
+        except (GLib.Error, OSError, RuntimeError) as e:
+            # KMS activation and hotplug can lag the D-Bus notification. Retry
+            # briefly, reading fresh state each time, then wait for a new event.
+            self.attempts += 1
+            if self.attempts < 20:
+                self.pending = GLib.timeout_add(250, self.rescan)
+            else:
+                print(f"could not refresh GNOME backlights: {e}", file=sys.stderr)
+        return GLib.SOURCE_REMOVE
+
+
+def watch(proxy):
+    import pyudev
+
+    watcher = Watcher(proxy)
+    monitor = pyudev.Monitor.from_netlink(pyudev.Context())
+    monitor.filter_by(subsystem="backlight")
+    monitor.start()
+
+    def on_udev(_fd, _condition):
+        while (device := monitor.poll(timeout=0)) is not None:
+            watcher.backlight_changed(device.action)
+        return GLib.SOURCE_CONTINUE
+
+    # Subscribe before the initial scan so startup events cannot be missed.
+    GLib.io_add_watch(monitor.fileno(), GLib.IO_IN, on_udev)
+    proxy.connect("g-signal", watcher.monitor_changed)
+    proxy.connect("notify::g-name-owner", watcher.owner_changed)
+    watcher.schedule()
+    GLib.MainLoop().run()
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--watch", action="store_true",
+                        help="watch monitor and backlight changes for the session")
+    args = parser.parse_args()
     try:
-        # method 1: temporary, the stored configuration stays as it is
-        proxy.call_sync(
-            "ApplyMonitorsConfig",
-            GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, new_logical, config_props)),
-            Gio.DBusCallFlags.NONE, -1, None)
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        proxy = Gio.DBusProxy.new_sync(
+            bus, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None,
+            BUS_NAME, OBJECT_PATH, BUS_NAME, None)
     except GLib.Error as e:
-        print(f"could not re-apply the display configuration: {e.message}", file=sys.stderr)
+        print(f"GNOME display configuration not available: {e.message}", file=sys.stderr)
+        return 1 if args.watch else 0
+    if args.watch:
+        return watch(proxy)
+    if not proxy.get_name_owner():
+        return 0
+    try:
+        apply_config(proxy, read_config(proxy))
+    except (GLib.Error, RuntimeError) as e:
+        print(f"could not re-apply the display configuration: {e}", file=sys.stderr)
         return 1
     return 0
 

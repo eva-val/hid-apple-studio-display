@@ -76,25 +76,24 @@ in
 
     # Install only the requested integration rules. The standalone tools package
     # also ships the complete upstream rules for manual installation.
-    services.udev.extraRules = ''
-      ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="apple_studio_display*", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="asd-gnome-rescan.service"
-    ''
-    + lib.optionalString cfg.ambientLight.enable ''
-      ACTION=="add|change", SUBSYSTEM=="iio", KERNELS=="0003:05AC:1114.*|0003:05AC:1116.*", ATTR{name}=="als", PROGRAM="${tools}/lib/udev/asd-als-role %p", RESULT=="rear", ENV{IIO_SENSOR_PROXY_TYPE}=""
-    ''
-    + lib.optionalString cfg.orientation.enable ''
-      ACTION=="add", SUBSYSTEM=="hid", ENV{MODALIAS}=="hid:b0003g0003v000005ACp0000111[46]", RUN+="${tools}/lib/udev/asd-bind-orientation %k"
-    '';
+    services.udev.extraRules =
+      lib.optionalString cfg.ambientLight.enable ''
+        ACTION=="add|change", SUBSYSTEM=="iio", KERNELS=="0003:05AC:1114.*|0003:05AC:1116.*", ATTR{name}=="als", PROGRAM="${tools}/lib/udev/asd-als-role %p", RESULT=="rear", ENV{IIO_SENSOR_PROXY_TYPE}=""
+      ''
+      + lib.optionalString cfg.orientation.enable ''
+        ACTION=="add", SUBSYSTEM=="hid", ENV{MODALIAS}=="hid:b0003g0003v000005ACp0000111[46]", RUN+="${tools}/lib/udev/asd-bind-orientation %k"
+      '';
 
     systemd.user.services.asd-gnome-rescan = {
       description = "Discover the Apple Studio Display brightness control in GNOME";
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
-      # Also rescan displays already connected before the session started.
       wantedBy = [ "graphical-session.target" ];
       serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${tools}/bin/asd-gnome-rescan";
+        Type = "simple";
+        ExecStart = "${tools}/bin/asd-gnome-rescan --watch";
+        Restart = "on-failure";
+        RestartSec = 5;
       };
     };
 

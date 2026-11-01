@@ -7,7 +7,10 @@
   python3,
 }:
 let
-  python = python3.withPackages (ps: [ ps.pygobject3 ]);
+  python = python3.withPackages (ps: [
+    ps.pygobject3
+    ps.pyudev
+  ]);
 in
 stdenvNoCC.mkDerivation {
   pname = "hid-apple-studio-display-tools";
@@ -19,6 +22,7 @@ stdenvNoCC.mkDerivation {
     root = ../.;
     fileset = lib.fileset.unions [
       ../contrib
+      ../tests
       ../dkms.conf
     ];
   };
@@ -63,6 +67,8 @@ stdenvNoCC.mkDerivation {
     # This imports Gio/GLib without needing hardware or a desktop session.
     "$out/bin/asd-autorotate" --help > /dev/null
     env -u DBUS_SESSION_BUS_ADDRESS "$out/bin/asd-gnome-rescan"
+    ${python}/bin/python3 -m unittest discover -s tests
+    ${python}/bin/python3 -c 'import pyudev'
     runHook postInstallCheck
   '';
 

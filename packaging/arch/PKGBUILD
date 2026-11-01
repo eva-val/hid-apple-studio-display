@@ -9,6 +9,7 @@ url="https://github.com/michaljach/hid-apple-studio-display"
 license=('GPL-2.0-only')
 depends=('dkms')
 optdepends=('python-gobject: GNOME brightness slider without re-plugging (asd-gnome-rescan), asd-autorotate'
+            'python-pyudev: GNOME backlight event watcher'
             'iio-sensor-proxy: automatic brightness from the ambient light sensor')
 source=("$_pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('21fba604dd5ada43f3b07d4badd2ea4f94a432422732abc0044803fbf9acb149')

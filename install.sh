@@ -120,17 +120,20 @@ if have udevadm; then
 	udevadm trigger --subsystem-match=iio --action=change 2>/dev/null || true
 fi
 if have systemctl; then
+	systemctl --global enable asd-gnome-rescan.service
 	systemctl try-restart iio-sensor-proxy.service 2>/dev/null || true
 fi
 
-# The backlight was registered by the modprobe above, before the udev rule that
-# tells GNOME about it existed: do what the rule does for every graphical
-# session that is already running.
+# Enable the watcher for future sessions and restart it in existing graphical
+# sessions so upgrades replace the previous one-shot service.
 rescan_sessions() {
 	if ! have loginctl || ! have systemctl; then return 0; fi
 	loginctl list-sessions --no-legend 2>/dev/null | while read -r sid _ user _; do
 		case "$(loginctl show-session "$sid" -p Type --value 2>/dev/null)" in
-			wayland|x11) systemctl --user -M "$user@" start asd-gnome-rescan.service 2>/dev/null || true ;;
+			wayland|x11)
+				systemctl --user -M "$user@" daemon-reload 2>/dev/null || true
+				systemctl --user -M "$user@" restart asd-gnome-rescan.service 2>/dev/null || true
+				;;
 		esac
 	done
 }

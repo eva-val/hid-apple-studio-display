@@ -16,11 +16,17 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 if have systemctl; then
+	systemctl --global disable asd-gnome-rescan.service 2>/dev/null || true
+	if have loginctl; then
+		loginctl list-users --no-legend 2>/dev/null | while read -r _ user _; do
+			systemctl --user -M "$user@" disable --now asd-gnome-rescan.service 2>/dev/null || true
+		done
+	fi
 	systemctl --user -M "$(logname 2>/dev/null || echo root)@" disable --now asd-autorotate.service 2>/dev/null || true
 fi
 rm -f /etc/udev/rules.d/90-hid-apple-studio-display.rules /usr/lib/udev/asd-als-role /usr/lib/udev/asd-bind-orientation \
-      /usr/local/bin/asd-autorotate /usr/local/lib/systemd/user/asd-autorotate.service \
-      /usr/local/bin/asd-gnome-rescan /usr/local/lib/systemd/user/asd-gnome-rescan.service
+	/usr/local/bin/asd-autorotate /usr/local/lib/systemd/user/asd-autorotate.service \
+	/usr/local/bin/asd-gnome-rescan /usr/local/lib/systemd/user/asd-gnome-rescan.service
 if have udevadm; then
 	udevadm control --reload 2>/dev/null || true
 fi

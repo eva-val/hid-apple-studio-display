@@ -1,7 +1,13 @@
 [Unit]
 Description=Let GNOME pick up the Apple Studio Display brightness control
-# Pulled in by the udev rule (SYSTEMD_USER_WANTS) when the backlight appears
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
-Type=oneshot
-ExecStart=/usr/bin/env asd-gnome-rescan
+Type=simple
+ExecStart=/usr/bin/env asd-gnome-rescan --watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

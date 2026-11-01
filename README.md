@@ -68,10 +68,11 @@ modules = [
 
 For a local checkout, use `url = "path:/absolute/path/to/hid-apple-studio-display"`.
 The module builds against **your `boot.kernelPackages`**, installs and loads
-the driver, installs the backlight notification rule and helpers, and provides the GNOME
-backlight rescan service with its Python dependencies. The service runs when
-the graphical session starts to cover displays connected before login, and
-when udev announces a newly added display backlight during the session.
+the driver, installs the helpers, and provides the GNOME backlight watcher
+with its Python dependencies. One service starts with the graphical session,
+rescans initially, and watches display configuration and backlight add/remove
+events. This covers displays connected before login and opening the laptop lid
+while docked; no udev rule is needed to start the service.
 NixOS rebuilds the driver when the kernel changes; DKMS and `install.sh` are
 unnecessary. Rebuild your system and reboot to activate the new kernel/module
 combination.
@@ -160,12 +161,25 @@ cat /sys/class/backlight/apple_studio_display0/actual_brightness
 ```
 
 GNOME only looks for backlights when it applies a monitor configuration, not
-when a backlight appears. Whenever the display's backlight shows up while a
-session is running (right after installing, or when only the display's USB link
-was re-plugged), the udev rule starts the `asd-gnome-rescan` user service, which
-re-applies the current configuration unchanged so the slider appears (needs
-python-gobject). If it still does not, run `asd-gnome-rescan` or re-apply the
-configuration in Settings → Displays.
+when a backlight appears. It can also select the wrong backlight when a laptop
+panel is not yet enabled, for example when opening the lid after docked startup.
+The `asd-gnome-rescan` session service watches monitor changes and backlight
+add/remove events, waits for active connectors to become enabled, and re-applies
+the current configuration unchanged. It ignores its own configuration
+notification and brightness-only events, so it does not continuously rescan.
+
+NixOS enables this service automatically; `install.sh` enables it for all users.
+For other package installations, install Python GObject and pyudev, then enable
+it for your user:
+
+```sh
+systemctl --user enable --now asd-gnome-rescan.service
+```
+
+Running `asd-gnome-rescan` without arguments still performs a single manual
+rescan; `--watch` runs the session watcher. A successful manual rescan does not
+verify the lid-open event path; test closed-lid login followed by opening the
+lid and adjusting both screens independently.
 
 If `install.sh` reports that the display's USB hub is there but the display
 itself is not, its USB controller has stopped responding (the kernel log shows
