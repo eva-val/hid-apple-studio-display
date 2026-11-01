@@ -53,6 +53,10 @@ stdenvNoCC.mkDerivation {
         --replace-fail "/usr/bin/env $helper" "$out/bin/$helper"
     done
 
+    install -Dm644 contrib/asd-detect "$out/libexec/asd-detect"
+    makeWrapper ${python}/bin/python3 "$out/bin/asd-detect" \
+      --add-flags "$out/libexec/asd-detect"
+
     install -Dm644 contrib/90-hid-apple-studio-display.rules \
       "$out/lib/udev/rules.d/90-hid-apple-studio-display.rules"
     substituteInPlace "$out/lib/udev/rules.d/90-hid-apple-studio-display.rules" \
@@ -66,6 +70,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstallCheck
     # This imports Gio/GLib without needing hardware or a desktop session.
     "$out/bin/asd-autorotate" --help > /dev/null
+    "$out/bin/asd-detect" --json > /dev/null
     env -u DBUS_SESSION_BUS_ADDRESS "$out/bin/asd-gnome-rescan"
     ${python}/bin/python3 -m unittest discover -s tests
     ${python}/bin/python3 -c 'import pyudev'

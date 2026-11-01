@@ -20,6 +20,10 @@ let
       enable = true;
       connector = "DP-1";
       fadeMs = 150;
+      displayMap = {
+        "first-usb-serial" = "12345678";
+        "second-usb-serial" = "87654321";
+      };
     };
   };
   customKernel = evaluate {
@@ -45,6 +49,8 @@ assert (driverFor enabled).kernel.modDirVersion == enabled.boot.kernelPackages.k
 assert
   (driverFor customKernel).kernel.modDirVersion == pkgs.linuxPackages_latest.kernel.modDirVersion;
 assert nixpkgs.lib.hasInfix "fade_ms=150 connector=DP-1" enabled.boot.extraModprobeConfig;
+assert nixpkgs.lib.hasInfix "display_map=first-usb-serial:12345678,second-usb-serial:87654321"
+  enabled.boot.extraModprobeConfig;
 assert !(enabled.systemd.user.services ? asd-autorotate);
 assert enabled.systemd.user.services.asd-gnome-rescan.after == [ "graphical-session.target" ];
 assert enabled.systemd.user.services.asd-gnome-rescan.serviceConfig.Type == "simple";

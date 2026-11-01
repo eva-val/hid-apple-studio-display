@@ -113,6 +113,7 @@ install -Dm644 contrib/90-hid-apple-studio-display.rules /etc/udev/rules.d/90-hi
 install -Dm755 contrib/asd-autorotate /usr/local/bin/asd-autorotate
 install -Dm644 contrib/asd-autorotate.service /usr/local/lib/systemd/user/asd-autorotate.service
 install -Dm755 contrib/asd-gnome-rescan /usr/local/bin/asd-gnome-rescan
+install -Dm755 contrib/asd-detect /usr/local/bin/asd-detect
 install -Dm644 contrib/asd-gnome-rescan.service /usr/local/lib/systemd/user/asd-gnome-rescan.service
 /usr/lib/udev/asd-bind-orientation
 if have udevadm; then

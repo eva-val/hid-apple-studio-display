@@ -3,6 +3,7 @@
   stdenv,
   kernel,
   kernelModuleMakeFlags,
+  python3,
 }:
 stdenv.mkDerivation {
   pname = "hid-apple-studio-display";
@@ -16,6 +17,7 @@ stdenv.mkDerivation {
       ../Makefile
       ../dkms.conf
       ../hid-apple-studio-display.c
+      ../tests/connector_matching.py
     ];
   };
   nativeBuildInputs = kernel.moduleBuildDependencies;
@@ -35,6 +37,14 @@ stdenv.mkDerivation {
   ];
   installTargets = [ "install" ];
   enableParallelBuilding = true;
+
+  doCheck = true;
+  nativeCheckInputs = [ python3 ];
+  checkPhase = ''
+    runHook preCheck
+    python3 tests/connector_matching.py
+    runHook postCheck
+  '';
 
   # Leave module stripping, compression and signing to the kernel build.
   dontStrip = true;

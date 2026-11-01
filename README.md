@@ -56,7 +56,7 @@ modules = [
   {
     hardware.apple-studio-display = {
       enable = true;
-      connector = "DP-1";
+      # connector = "DP-1"; # optional override; auto-detected by default
       # fadeMs = 150;
       # ambientLight.enable = true; # front sensor and iio-sensor-proxy
       # autoRotate.enable = true; # experimental; GNOME only
@@ -77,8 +77,10 @@ NixOS rebuilds the driver when the kernel changes; DKMS and `install.sh` are
 unnecessary. Rebuild your system and reboot to activate the new kernel/module
 combination.
 
-`connector` defaults to auto-detection (`null`); set it when multiple connectors
-are connected, including a laptop's built-in panel. `fadeMs` defaults to `0`.
+`connector` defaults to auto-detection (`null`), which identifies a single Studio
+Display from its EDID and skips secondary tiles and other monitors, including a
+laptop's built-in panel. For two Studio Displays, configure `displayMap` as
+described below. `fadeMs` defaults to `0`.
 Sensor integration is opt-in. Set `ambientLight.enable = true` to select the
 front light sensor and enable iio-sensor-proxy for automatic brightness.
 `autoRotate.enable = true` enables orientation rebinding and starts the
@@ -186,6 +188,54 @@ itself is not, its USB controller has stopped responding (the kernel log shows
 `error -71` for it): unplug the USB‑C/Thunderbolt cable for a few seconds, or
 power-cycle the display.
 
+## Detecting and pairing multiple displays
+
+Run `asd-detect` (or `python3 contrib/asd-detect` from a checkout) to list USB
+serials and connected Studio Display video outputs. It only reads sysfs and
+does not need root. `--json` produces machine-readable output.
+
+A Studio Display can expose two DP connectors with the same EDID serial. Those
+are tiles of one physical screen; the driver attaches its backlight to tile
+0,0. It ignores laptop panels and other monitor models during auto-detection.
+
+Two physical Studio Displays have independent USB brightness interfaces, but
+the USB serial is not the numeric serial in their EDIDs. This driver currently
+needs a one-time pairing to associate them reliably. Connect **one physical
+Studio Display at a time**, with both USB and video attached, and record the
+`display_map=USB_SERIAL:EDID_SERIAL` pair printed by `asd-detect`. Repeat for the
+other display. With both reconnected, configure the two pairs:
+
+```nix
+hardware.apple-studio-display = {
+  enable = true;
+  displayMap = {
+    "FIRST-USB-SERIAL" = "12345678";
+    "SECOND-USB-SERIAL" = "87654321";
+  };
+};
+```
+
+Or, for other distributions, use a modprobe configuration:
+
+```conf
+options hid-apple-studio-display display_map=FIRST-USB-SERIAL:12345678,SECOND-USB-SERIAL:87654321
+```
+
+Replace the example identities with the tool's output. EDID serials are eight
+hexadecimal digits. Rebuild/reboot on NixOS, or reload the module after changing
+modprobe settings. Mappings take precedence over `connector=`; include every
+Studio Display when using them. They survive changes to GPU card and connector
+numbers. A missing, zero or duplicate EDID serial cannot provide a unique match.
+Ambiguous matches remain unattached to DRM rather than controlling the wrong
+monitor. After the registration timeout they still get individual backlight
+devices for command-line control, but GNOME cannot associate those devices.
+
+Use `/sys/class/backlight/apple_studio_display*/` to verify that each backlight
+has a different DRM connector as its parent, then test each GNOME brightness
+slider independently. The numeric suffix is an allocation ID, not a persistent
+display identity. Video-only reconnection while USB stays attached still needs
+a module reload to redo the mapping.
+
 ## Automatic brightness
 
 The display has two ambient light sensors (front and rear); the kernel's
@@ -233,7 +283,8 @@ also determines how long it stays out of autosuspend.
 
 | Parameter | Default | |
 |---|---|---|
-| `connector` | *(auto)* | DRM connector the display is on, e.g. `DP-1`. Auto-detection picks the single connected connector; with several monitors connected you must set this. |
+| `connector` | *(auto)* | Override such as `DP-1` or `card0-DP-1`. Auto-detection selects the single Studio Display's first tile. Bare connector names must be unique across GPUs. |
+| `display_map` | *(empty)* | Comma-separated `USB_SERIAL:EDID_SERIAL` pairs for multiple displays. Overrides `connector`; matches by identity instead of connector numbering. |
 | `fade_ms` | `0` | Transition time the display applies to brightness changes, in ms. |
 
 Set them in `/etc/modprobe.d/hid-apple-studio-display.conf`:
@@ -280,7 +331,9 @@ through this control. Requests wake the (autosuspended) display first.
 - `hid-sensor-als` reports the light sensors' milli-lux values as lux
   (1000× too high). Harmless for GNOME, which works relatively.
 - Finding the connector walks the device tree (PCI display controller →
-  `drm/cardN` → connector). Non-PCI GPUs are not handled; set `connector=`.
+  `drm/cardN` → connector). Non-PCI GPUs are not handled, even with an override.
+- Multiple Studio Displays require the one-time USB/EDID pairing above. Fully
+  automatic pairing of two identical displays is not implemented.
 - With HDR enabled in GNOME, mutter uses its own reference-white control
   instead of the backlight.
 

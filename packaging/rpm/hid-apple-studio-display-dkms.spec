@@ -42,6 +42,7 @@ install -D -m 0755 contrib/asd-als-role %{buildroot}%{udevdir}/asd-als-role
 install -D -m 0755 contrib/asd-bind-orientation %{buildroot}%{udevdir}/asd-bind-orientation
 install -D -m 0755 contrib/asd-autorotate %{buildroot}%{_bindir}/asd-autorotate
 install -D -m 0644 contrib/asd-autorotate.service %{buildroot}%{_userunitdir}/asd-autorotate.service
+install -D -m 0755 contrib/asd-detect %{buildroot}%{_bindir}/asd-detect
 install -D -m 0755 contrib/asd-gnome-rescan %{buildroot}%{_bindir}/asd-gnome-rescan
 install -D -m 0644 contrib/asd-gnome-rescan.service %{buildroot}%{_userunitdir}/asd-gnome-rescan.service
 
@@ -67,6 +68,7 @@ fi
 %{_bindir}/asd-autorotate
 %{_userunitdir}/asd-autorotate.service
 %{_bindir}/asd-gnome-rescan
+%{_bindir}/asd-detect
 %{_userunitdir}/asd-gnome-rescan.service
 
 %changelog

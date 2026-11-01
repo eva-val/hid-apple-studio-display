@@ -45,6 +45,8 @@
 #include <linux/string.h>
 #include <linux/workqueue.h>
 #include <drm/drm_connector.h>
+#include <drm/drm_device.h>
+#include <drm/drm_property.h>
 
 #define USB_VENDOR_ID_APPLE			0x05ac
 #define USB_DEVICE_ID_APPLE_STUDIO_DISPLAY	0x1114
@@ -66,7 +68,18 @@
 static char *connector;
 module_param(connector, charp, 0444);
 MODULE_PARM_DESC(connector,
-		 "DRM connector the display is attached to, e.g. DP-1 (default: the only connected connector)");
+		 "DRM connector the display is attached to, e.g. DP-1 or card0-DP-1 (default: detect Studio Display)");
+
+#define ASD_MAX_DISPLAYS 16
+static char *display_map[ASD_MAX_DISPLAYS];
+static unsigned int display_map_count;
+module_param_array(display_map, charp, &display_map_count, 0444);
+MODULE_PARM_DESC(display_map,
+		 "USB serial:EDID serial (hex) pairs, comma-separated; overrides connector=");
+
+/* Serialise connector ownership across concurrently probing displays. */
+static DEFINE_MUTEX(asd_backlights_lock);
+static LIST_HEAD(asd_backlights);
 
 static unsigned int fade_ms;
 module_param(fade_ms, uint, 0644);
@@ -88,6 +101,7 @@ struct asd_device {
 	struct mutex lock;			/* serialises access to buf */
 	u8 *buf;				/* hid_report_len(report) bytes */
 	struct backlight_device *bl;
+	struct list_head backlight_node;
 	struct delayed_work register_work;
 	unsigned int retries;
 	int id;
@@ -182,15 +196,42 @@ static struct hid_report *asd_find_report(struct hid_device *hdev,
 /* --- DRM connector lookup --------------------------------------------- */
 
 struct asd_connector_search {
-	const char *name;		/* NULL: pick the only connected one */
+	const char *name;
+	bool match_serial;
+	u32 serial;
 	struct device *found;
 	unsigned int n_connected;
 };
 
+/* EDID identity is independent of card/connector enumeration order. */
+static bool asd_edid_matches(const u8 *edid, size_t len,
+			     const struct asd_connector_search *s)
+{
+	unsigned int i;
+	u32 serial;
+
+	/* APP manufacturer, and a Studio Display monitor-name descriptor. */
+	if (len < 128 || edid[8] != 0x06 || edid[9] != 0x10)
+		return false;
+	serial = (u32)edid[12] | (u32)edid[13] << 8 |
+		 (u32)edid[14] << 16 | (u32)edid[15] << 24;
+	if (s->match_serial && serial != s->serial)
+		return false;
+	for (i = 54; i < 126; i += 18) {
+		if (!edid[i] && !edid[i + 1] && !edid[i + 2] &&
+		    edid[i + 3] == 0xfc && !edid[i + 4] &&
+		    !memcmp(edid + i + 5, "Studio", 6))
+			return true;
+	}
+	return false;
+}
+
 static int asd_match_connector(struct device *dev, void *data)
 {
 	struct asd_connector_search *s = data;
+	struct drm_property_blob *blob;
 	struct drm_connector *conn;
+	bool match;
 
 	if (!dev->type || !dev->type->name ||
 	    strcmp(dev->type->name, "drm_connector"))
@@ -200,18 +241,58 @@ static int asd_match_connector(struct device *dev, void *data)
 	if (!conn || !conn->name)
 		return 0;
 
+	mutex_lock(&conn->dev->mode_config.mutex);
 	if (s->name) {
-		if (strcmp(conn->name, s->name))
-			return 0;
-		s->found = get_device(dev);
-		return 1;
+		/* A bare name must be unique across GPUs too. */
+		match = !strcmp(conn->name, s->name) ||
+			!strcmp(dev_name(dev), s->name);
+	} else {
+		blob = conn->edid_blob_ptr;
+		match = conn->status == connector_status_connected && blob &&
+			asd_edid_matches(blob->data, blob->length, s);
+		/* Both DP streams describe the same housing. Use its first tile. */
+		if (conn->has_tile && (conn->tile_h_loc || conn->tile_v_loc))
+			match = false;
 	}
+	if (match) {
+		if (!s->found)
+			s->found = get_device(dev);
+		s->n_connected++;
+	}
+	mutex_unlock(&conn->dev->mode_config.mutex);
+	return 0;
+}
 
-	if (conn->status != connector_status_connected)
-		return 0;
-	if (!s->found)
-		s->found = get_device(dev);
-	s->n_connected++;
+/* Never fall back to guessing when a configured identity is absent/invalid. */
+static int asd_lookup_identity(struct hid_device *hdev,
+			       struct asd_connector_search *s)
+{
+	u32 serials[ASD_MAX_DISPLAYS];
+	unsigned int i, j;
+	const char *entry, *sep;
+
+	for (i = 0; i < display_map_count; i++) {
+		entry = display_map[i];
+		sep = strchr(entry, ':');
+		if (!sep || sep == entry || !sep[1])
+			return -EINVAL;
+		if (kstrtou32(sep + 1, 16, &serials[i]) || !serials[i])
+			return -EINVAL;
+		for (j = 0; j < i; j++) {
+			if (serials[j] == serials[i])
+				return -EINVAL;
+		}
+		if (strlen(hdev->uniq) != sep - entry ||
+		    strncmp(hdev->uniq, entry, sep - entry))
+			continue;
+		if (s->match_serial)
+			return -EINVAL;
+		s->serial = serials[i];
+		s->match_serial = true;
+	}
+	if (display_map_count)
+		return s->match_serial ? 0 : -ENOENT;
+	s->name = connector && *connector ? connector : NULL;
 	return 0;
 }
 
@@ -229,30 +310,46 @@ static int asd_match_card(struct device *dev, void *data)
  * lets a non-DRM driver enumerate connectors, so walk the device tree instead:
  * PCI display controller -> drm/cardN -> cardN-<connector>.
  */
-static struct device *asd_find_connector(struct hid_device *hdev)
+static struct device *asd_find_connector(struct asd_device *asd)
 {
-	struct asd_connector_search s = {
-		.name = connector && *connector ? connector : NULL,
-	};
+	struct hid_device *hdev = asd->hdev;
+	struct asd_connector_search s = { };
 	struct pci_dev *pdev = NULL;
+	struct asd_device *other;
+	int ret;
 
-	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev))) {
-		if ((pdev->class >> 16) != PCI_BASE_CLASS_DISPLAY)
-			continue;
-		if (device_for_each_child(&pdev->dev, &s, asd_match_card)) {
-			pci_dev_put(pdev);
-			break;
-		}
-	}
-
-	if (!s.name && s.n_connected > 1) {
-		hid_warn(hdev, "%u connected DRM connectors, set the connector= module parameter\n",
-			 s.n_connected);
-		put_device(s.found);
+	ret = asd_lookup_identity(hdev, &s);
+	if (ret) {
+		if (!asd->retries)
+			hid_warn(hdev, "no valid display_map entry for USB serial %s (%d)\n",
+				 hdev->uniq, ret);
 		return NULL;
 	}
 
+	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev))) {
+		if ((pdev->class >> 16) == PCI_BASE_CLASS_DISPLAY)
+			device_for_each_child(&pdev->dev, &s, asd_match_card);
+	}
+
+	if (s.n_connected > 1) {
+		if (!asd->retries)
+			hid_warn(hdev, "%u matching DRM connectors; set display_map=USB_SERIAL:EDID_SERIAL or a unique connector=\n",
+				 s.n_connected);
+		goto ambiguous;
+	}
+
+	list_for_each_entry(other, &asd_backlights, backlight_node) {
+		if (other->bl->dev.parent == s.found) {
+			if (!asd->retries)
+				hid_warn(hdev, "DRM connector already has a Studio Display backlight; set display_map= for each display\n");
+			goto ambiguous;
+		}
+	}
 	return s.found;
+
+ambiguous:
+	put_device(s.found);
+	return NULL;
 }
 
 /* --- brightness -------------------------------------------------------- */
@@ -327,9 +424,11 @@ static void asd_register_backlight(struct work_struct *work)
 	char name[32];
 	u32 value;
 
-	parent = asd_find_connector(hdev);
+	mutex_lock(&asd_backlights_lock);
+	parent = asd_find_connector(asd);
 	if (!parent) {
 		if (++asd->retries < ASD_CONNECTOR_RETRIES) {
+			mutex_unlock(&asd_backlights_lock);
 			schedule_delayed_work(&asd->register_work,
 					      msecs_to_jiffies(ASD_CONNECTOR_RETRY_MS));
 			return;
@@ -344,16 +443,20 @@ static void asd_register_backlight(struct work_struct *work)
 
 	snprintf(name, sizeof(name), "apple_studio_display%d", asd->id);
 	bl = backlight_device_register(name, parent, asd, &asd_bl_ops, &props);
-	put_device(parent);
 	if (IS_ERR(bl)) {
+		put_device(parent);
+		mutex_unlock(&asd_backlights_lock);
 		hid_err(hdev, "failed to register backlight: %pe\n", bl);
 		return;
 	}
 	asd->bl = bl;
+	list_add_tail(&asd->backlight_node, &asd_backlights);
+	mutex_unlock(&asd_backlights_lock);
 
 	hid_info(hdev, "backlight %s registered on %s (%d..%d, now %u)\n",
 		 name, dev_name(parent), asd->brightness.field->logical_minimum,
 		 asd->brightness.field->logical_maximum, value);
+	put_device(parent);
 }
 
 /* --- orientation sensor ------------------------------------------------ */
@@ -561,8 +664,12 @@ static void asd_remove(struct hid_device *hdev)
 	}
 
 	cancel_delayed_work_sync(&asd->register_work);
-	if (asd->bl)
+	mutex_lock(&asd_backlights_lock);
+	if (asd->bl) {
+		list_del(&asd->backlight_node);
 		backlight_device_unregister(asd->bl);
+	}
+	mutex_unlock(&asd_backlights_lock);
 	hid_hw_stop(hdev);
 	ida_free(&asd_ida, asd->id);
 }

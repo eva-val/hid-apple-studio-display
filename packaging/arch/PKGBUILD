@@ -19,7 +19,7 @@ package() {
 	install -Dm644 -t "$pkgdir/usr/src/$_pkgname-$pkgver" "$_pkgname.c" Makefile dkms.conf
 	install -Dm644 -t "$pkgdir/usr/lib/udev/rules.d" contrib/90-hid-apple-studio-display.rules
 	install -Dm755 -t "$pkgdir/usr/lib/udev" contrib/asd-als-role contrib/asd-bind-orientation
-	install -Dm755 -t "$pkgdir/usr/bin" contrib/asd-autorotate contrib/asd-gnome-rescan
+	install -Dm755 -t "$pkgdir/usr/bin" contrib/asd-autorotate contrib/asd-gnome-rescan contrib/asd-detect
 	install -Dm644 -t "$pkgdir/usr/lib/systemd/user" contrib/asd-autorotate.service contrib/asd-gnome-rescan.service
 	install -Dm644 -t "$pkgdir/usr/share/doc/$pkgname" README.md
 	install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE

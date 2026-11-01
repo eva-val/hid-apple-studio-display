@@ -61,6 +61,9 @@ jobs:
         if: matrix.kernel == 'stable'
         run: linux/scripts/checkpatch.pl --no-tree --strict -f hid-apple-studio-display.c
 
+      - name: Connector matching regressions
+        run: python3 tests/connector_matching.py
+
   packaging:
     name: packaging sanity
     runs-on: ubuntu-latest

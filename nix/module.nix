@@ -19,9 +19,23 @@ in
       default = null;
       example = "DP-1";
       description = ''
-        DRM connector for the display. Null uses driver auto-detection, which
-        requires a single connected connector. Set this explicitly when other
-        monitors or a laptop panel are connected.
+        DRM connector override, such as DP-1 or card0-DP-1. Null detects a
+        single Studio Display from EDID, ignoring other monitors and secondary
+        tiles. Use displayMap for multiple Studio Displays.
+      '';
+    };
+
+    displayMap = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.strMatching "[0-9a-fA-F]{8}");
+      default = { };
+      example = {
+        "00008030-0011223344556677" = "1234abcd";
+      };
+      description = ''
+        Map each display's USB serial to its eight-digit hexadecimal EDID serial.
+        Run asd-detect with one physical Studio Display connected at a time to
+        obtain pairs. This survives connector renumbering and takes precedence
+        over connector. Every attached Studio Display needs an entry when set.
       '';
     };
 
@@ -61,11 +75,28 @@ in
     boot.extraModprobeConfig = ''
       options hid-apple-studio-display fade_ms=${toString cfg.fadeMs}${
         lib.optionalString (cfg.connector != null) " connector=${cfg.connector}"
+      }${
+        lib.optionalString (cfg.displayMap != { }) (
+          " display_map="
+          + lib.concatStringsSep "," (lib.mapAttrsToList (serial: edid: "${serial}:${edid}") cfg.displayMap)
+        )
       }
     '';
 
     environment.systemPackages = [ tools ];
     assertions = [
+      {
+        assertion =
+          builtins.length (builtins.attrNames cfg.displayMap) <= 16
+          && lib.all (serial: builtins.match "[A-Za-z0-9-]+" serial != null) (
+            builtins.attrNames cfg.displayMap
+          )
+          && lib.all (edid: edid != "00000000") (builtins.attrValues cfg.displayMap)
+          &&
+            builtins.length (lib.unique (map lib.toLower (builtins.attrValues cfg.displayMap)))
+            == builtins.length (builtins.attrNames cfg.displayMap);
+        message = "Apple Studio Display displayMap requires at most 16 USB serials and unique nonzero EDID serials.";
+      }
       {
         assertion = !cfg.autoRotate.enable || cfg.orientation.enable;
         message = "Apple Studio Display auto-rotation requires orientation.enable.";
