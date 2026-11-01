@@ -17,3 +17,6 @@ packaging/arch/pkg/
 packaging/arch/*.tar.*
 packaging/arch/*.pkg.*
 __pycache__/
+# Nix build outputs
+/result
+/result-*

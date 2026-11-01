@@ -5,6 +5,14 @@ on:
   pull_request:
 
 jobs:
+  nix:
+    name: Nix packages and NixOS module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check --print-build-logs
+
   module:
     name: kernel ${{ matrix.kernel }}
     runs-on: ubuntu-latest

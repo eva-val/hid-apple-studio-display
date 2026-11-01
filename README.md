@@ -34,6 +34,83 @@ kernel from 5.10 up (checked in CI).
 
 ## Install
 
+### Nix / NixOS
+
+This fork provides a flake with a kernel module package, desktop helpers and a
+NixOS module. Add it to your system flake's `inputs`:
+
+```nix
+apple-studio-display = {
+  url = "github:eva-val/hid-apple-studio-display";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Add `apple-studio-display` to your `outputs` arguments, then include the module
+in your existing `nixpkgs.lib.nixosSystem` definition:
+
+```nix
+modules = [
+  apple-studio-display.nixosModules.default
+  ./configuration.nix
+  {
+    hardware.apple-studio-display = {
+      enable = true;
+      connector = "DP-1";
+      # fadeMs = 150;
+      # ambientLight.enable = true; # front sensor and iio-sensor-proxy
+      # autoRotate.enable = true; # experimental; GNOME only
+      # autoRotate.extraArgs = [ "--axis" "z" "--invert" ];
+    };
+  }
+];
+```
+
+For a local checkout, use `url = "path:/absolute/path/to/hid-apple-studio-display"`.
+The module builds against **your `boot.kernelPackages`**, installs and loads
+the driver, installs the backlight notification rule and helpers, and provides the GNOME
+backlight rescan service with its Python dependencies. NixOS rebuilds the
+driver when the kernel changes; DKMS and `install.sh` are unnecessary. Rebuild
+your system and reboot to activate the new kernel/module combination.
+
+`connector` defaults to auto-detection (`null`); set it when multiple connectors
+are connected, including a laptop's built-in panel. `fadeMs` defaults to `0`.
+Sensor integration is opt-in. Set `ambientLight.enable = true` to select the
+front light sensor and enable iio-sensor-proxy for automatic brightness.
+`autoRotate.enable = true` enables orientation rebinding and starts the
+experimental GNOME rotation service with the graphical session. To expose
+orientation readings without running that service, set `orientation.enable =
+true` alone. The default adds neither sensor rule; the driver itself can still
+claim its matching orientation interface during normal device enumeration.
+
+When replacing an inline NixOS derivation, remove its old
+`boot.extraModulePackages`, module-loading, modprobe, udev and rescan-service
+definitions in favour of the options above. Keep your kernel selection and any
+separate desktop patches. For example, the existing kernel 7.2 setup uses
+`connector = "DP-1"`; the display's unused `DP-2` tile is not the right parent
+for its backlight.
+
+To build the packages without activating them:
+
+```sh
+nix build                         # module for the flake's default kernel
+nix build .#tools                 # udev rules and self-contained GNOME helpers
+nix flake check                   # build packages and check NixOS integration
+```
+
+For a non-flake NixOS configuration, import `./nix/module.nix` from a checkout
+and set the same `hardware.apple-studio-display` options. The driver can also
+be built with `nix-build`, or with a chosen kernel package set:
+
+```sh
+nix-build --arg kernelPackages '(import <nixpkgs> {}).linuxPackages_latest'
+```
+
+The standalone build must match the target kernel exactly. Installing it with
+`nix profile install` does not register a kernel module; on NixOS use the
+module above or `boot.extraModulePackages`. Outputs are provided for
+`x86_64-linux` and `aarch64-linux`.
+
 ### Any distribution
 
 ```sh
