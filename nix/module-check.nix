@@ -58,6 +58,9 @@ pkgs.runCommand "hid-apple-studio-display-module-check" { } ''
   test -e ${customKernel.environment.etc."udev/rules.d".source}/99-local.rules
   test -e ${enabled.environment.etc."systemd/user".source}/asd-gnome-rescan.service
   test -e ${
+    enabled.environment.etc."systemd/user".source
+  }/graphical-session.target.wants/asd-gnome-rescan.service
+  test -e ${
     customKernel.environment.etc."systemd/user".source
   }/graphical-session.target.wants/asd-autorotate.service
   ! grep -q 'asd-bind-orientation\|asd-als-role' ${

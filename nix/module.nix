@@ -90,6 +90,8 @@ in
       description = "Discover the Apple Studio Display brightness control in GNOME";
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
+      # Also rescan displays already connected before the session started.
+      wantedBy = [ "graphical-session.target" ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${tools}/bin/asd-gnome-rescan";

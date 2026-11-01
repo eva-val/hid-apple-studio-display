@@ -69,9 +69,12 @@ modules = [
 For a local checkout, use `url = "path:/absolute/path/to/hid-apple-studio-display"`.
 The module builds against **your `boot.kernelPackages`**, installs and loads
 the driver, installs the backlight notification rule and helpers, and provides the GNOME
-backlight rescan service with its Python dependencies. NixOS rebuilds the
-driver when the kernel changes; DKMS and `install.sh` are unnecessary. Rebuild
-your system and reboot to activate the new kernel/module combination.
+backlight rescan service with its Python dependencies. The service runs when
+the graphical session starts to cover displays connected before login, and
+when udev announces a newly added display backlight during the session.
+NixOS rebuilds the driver when the kernel changes; DKMS and `install.sh` are
+unnecessary. Rebuild your system and reboot to activate the new kernel/module
+combination.
 
 `connector` defaults to auto-detection (`null`); set it when multiple connectors
 are connected, including a laptop's built-in panel. `fadeMs` defaults to `0`.
