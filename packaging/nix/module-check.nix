@@ -60,7 +60,6 @@ let
     hardware.apple-studio-display = {
       enable = true;
       ambientLight.enable = true;
-      ambientLight.preferredSerial = "preferred-display";
       autoRotate = {
         enable = true;
         extraArgs = [
@@ -95,9 +94,11 @@ assert !(disabledWithRotate.systemd.user.services ? asd-autorotate);
 assert !(nixpkgs.lib.hasInfix "asd-bind-orientation" disabledWithRotate.services.udev.extraRules);
 # GNOME may request the stock proxy for its own sensors independently of us.
 assert gnomeWithoutLight.nixpkgs.overlays == [ ];
-assert gnomeWithoutLight.hardware.sensor.iio.package.patches or [ ] == [ ];
-assert builtins.length gnomeWithLight.nixpkgs.overlays == 1;
-assert builtins.length gnomeWithLight.hardware.sensor.iio.package.patches > 0;
+assert gnomeWithoutLight.hardware.sensor.iio.package.drvPath == pkgs.iio-sensor-proxy.drvPath;
+assert gnomeWithLight.nixpkgs.overlays == [ ];
+assert
+  gnomeWithLight.hardware.sensor.iio.package.drvPath
+  == gnomeWithoutLight.hardware.sensor.iio.package.drvPath;
 assert customKernel.nixpkgs.overlays == [ ];
 assert builtins.elem "hid-apple-studio-display" enabled.boot.kernelModules;
 assert (driverFor enabled).kernel.modDirVersion == enabled.boot.kernelPackages.kernel.modDirVersion;
@@ -107,14 +108,10 @@ assert nixpkgs.lib.hasInfix "fade_ms=150 connector=DP-1" enabled.boot.extraModpr
 assert nixpkgs.lib.hasInfix "display_map=first-usb-serial:12345678,second-usb-serial:87654321"
   enabled.boot.extraModprobeConfig;
 assert !(enabled.systemd.user.services ? asd-autorotate);
-assert customKernel.hardware.sensor.iio.enable;
-assert builtins.length customKernel.hardware.sensor.iio.package.patches > 0;
-assert nixpkgs.lib.hasInfix ''ENV{ASD_ALS_ROLE}=="single|front"''
-  customKernel.services.udev.extraRules;
-assert nixpkgs.lib.hasInfix ''ATTRS{serial}=="preferred-display"''
-  customKernel.services.udev.extraRules;
-assert nixpkgs.lib.hasInfix ''ENV{IIO_SENSOR_PROXY_LIGHT_SCALE}="0.001"''
-  customKernel.services.udev.extraRules;
+assert !customKernel.hardware.sensor.iio.enable;
+assert customKernel.hardware.sensor.iio.package.drvPath == pkgs.iio-sensor-proxy.drvPath;
+assert nixpkgs.lib.hasInfix ''ENV{ASD_ALS_ROLE}="%c"'' customKernel.services.udev.extraRules;
+assert !(nixpkgs.lib.hasInfix "IIO_SENSOR_PROXY" customKernel.services.udev.extraRules);
 assert enabled.systemd.user.services.asd-gnome-rescan.after == [ "graphical-session.target" ];
 assert enabled.systemd.user.services.asd-gnome-rescan.serviceConfig.Type == "simple";
 assert nixpkgs.lib.hasSuffix " --watch"

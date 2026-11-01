@@ -5,9 +5,8 @@
 #   2. registers the module with DKMS so it is rebuilt on every kernel update,
 #      or, where DKMS is unavailable, builds and installs it for this kernel
 #   3. loads the module
-#   4. installs the udev rule and helpers that make iio-sensor-proxy use the
-#      display's front light sensor and give the orientation interface to this
-#      driver, plus the (experimental, opt-in) asd-autorotate helper
+#   4. installs sensor role annotations and the orientation rebind rule,
+#      plus the (experimental, opt-in) asd-autorotate helper
 #
 # Usage: sudo ./install.sh            (or just ./install.sh; it re-runs itself
 #                                      through sudo/doas when needed)
@@ -124,7 +123,6 @@ if have udevadm; then
 fi
 if have systemctl; then
 	systemctl --global enable asd-gnome-rescan.service
-	systemctl try-restart iio-sensor-proxy.service 2>/dev/null || true
 fi
 
 # Enable the watcher for future sessions and restart it in existing graphical
@@ -183,7 +181,6 @@ if [ -n "$bl" ]; then
 			&& printf '    orientation sensor: %s (x=%s y=%s z=%s)\n' "$d" \
 				"$(cat "$d/in_incli_x_raw")" "$(cat "$d/in_incli_y_raw")" "$(cat "$d/in_incli_z_raw")"
 	done
-	printf '    Automatic brightness: gsd-power does not re-claim the light sensor after the\n    iio-sensor-proxy restart above; toggle Settings > Power > Automatic Screen\n    Brightness off and on once (or log out and in).\n'
 	printf '    Auto-rotate (experimental): systemctl --user enable --now asd-autorotate\n'
 else
 	diagnose_missing_display

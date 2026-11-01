@@ -9,7 +9,6 @@ let
   cfg = config.hardware.apple-studio-display;
   driver = config.boot.kernelPackages.callPackage ./package.nix { };
   tools = pkgs.callPackage ./tools.nix { };
-  sensorProxy = pkgs.callPackage ./sensor-proxy.nix { };
 in
 {
   options.hardware.apple-studio-display = {
@@ -47,17 +46,7 @@ in
       description = "Brightness transition time in milliseconds.";
     };
 
-    ambientLight.enable = lib.mkEnableOption "front ambient light sensor selection and iio-sensor-proxy";
-
-    ambientLight.preferredSerial = lib.mkOption {
-      type = lib.types.nullOr (lib.types.strMatching "[A-Za-z0-9-]+");
-      default = null;
-      description = ''
-        USB serial of the preferred ambient-light source when multiple Studio
-        Displays are connected. Other display sensors and then the laptop ALS
-        remain fallbacks. GNOME consumes one shared ambient-light reading.
-      '';
-    };
+    ambientLight.enable = lib.mkEnableOption "ambient-light sensor role metadata (no brightness policy)";
 
     orientation.enable = lib.mkOption {
       type = lib.types.bool;
@@ -114,31 +103,13 @@ in
       }
     ];
 
-    hardware.sensor.iio.enable = lib.mkIf cfg.ambientLight.enable (lib.mkDefault true);
-    hardware.sensor.iio.package = lib.mkIf cfg.ambientLight.enable sensorProxy;
-
-    nixpkgs.overlays =
-      lib.mkIf (cfg.ambientLight.enable && config.services.desktopManager.gnome.enable)
-        [
-          (_final: prev: {
-            gnome-settings-daemon = prev.gnome-settings-daemon.overrideAttrs (old: {
-              patches = (old.patches or [ ]) ++ [ ../../patches/gnome-settings-daemon-reclaim-light.patch ];
-            });
-          })
-        ];
-
     # Install only the requested integration rules. The standalone tools package
     # also ships the complete upstream rules for manual installation.
     services.udev.extraRules =
       lib.optionalString cfg.ambientLight.enable ''
         ACTION=="add|change", SUBSYSTEM=="iio", KERNELS=="0003:05AC:1114.*|0003:05AC:1116.*", ATTR{name}=="als", PROGRAM="${tools}/lib/udev/asd-als-role %p", ENV{ASD_ALS_ROLE}="%c"
-        ACTION=="add|change", SUBSYSTEM=="iio", ENV{ASD_ALS_ROLE}=="rear", ENV{IIO_SENSOR_PROXY_TYPE}=""
-        ACTION=="add|change", SUBSYSTEM=="iio", ENV{ASD_ALS_ROLE}=="single|front", ENV{IIO_SENSOR_PROXY_LIGHT_PRIORITY}="100", ENV{IIO_SENSOR_PROXY_LIGHT_SCALE}="0.001"
         # Re-evaluate siblings once both sensors have finished enumerating.
         ACTION=="add", SUBSYSTEM=="iio", ENV{ASD_ALS_ROLE}=="single|front|rear", RUN+="${pkgs.systemd}/bin/udevadm trigger --action=change --subsystem-match=iio"
-      ''
-      + lib.optionalString (cfg.ambientLight.enable && cfg.ambientLight.preferredSerial != null) ''
-        ACTION=="add|change", SUBSYSTEM=="iio", ENV{ASD_ALS_ROLE}=="single|front", ATTRS{serial}=="${cfg.ambientLight.preferredSerial}", ENV{IIO_SENSOR_PROXY_LIGHT_PRIORITY}="200"
       ''
       + lib.optionalString cfg.orientation.enable ''
         ACTION=="add", SUBSYSTEM=="hid", ENV{MODALIAS}=="hid:b0003g0003v000005ACp0000111[46]", RUN+="${tools}/lib/udev/asd-bind-orientation %k"

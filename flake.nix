@@ -22,7 +22,6 @@
           default = driver;
           hid-apple-studio-display = driver;
           tools = pkgs.callPackage ./packaging/nix/tools.nix { };
-          sensor-proxy = pkgs.callPackage ./packaging/nix/sensor-proxy.nix { };
         }
       );
 
@@ -36,7 +35,6 @@
         {
           driver = self.packages.${system}.default;
           tools = self.packages.${system}.tools;
-          sensor-proxy = self.packages.${system}.sensor-proxy;
           module = import ./packaging/nix/module-check.nix {
             inherit nixpkgs pkgs;
             module = self.nixosModules.default;

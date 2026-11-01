@@ -16,7 +16,6 @@ Requires:       make
 Requires:       kernel-devel
 Recommends:     python3-gobject
 Recommends:     python3-pyudev
-Recommends:     iio-sensor-proxy
 
 %description
 Kernel driver that exposes the brightness of an Apple Studio Display or

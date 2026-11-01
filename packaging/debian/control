@@ -10,7 +10,7 @@ Rules-Requires-Root: no
 Package: hid-apple-studio-display-dkms
 Architecture: all
 Depends: ${misc:Depends}
-Recommends: python3-gi, python3-pyudev, iio-sensor-proxy
+Recommends: python3-gi, python3-pyudev
 Description: Apple Studio Display brightness and orientation driver (DKMS)
  Kernel driver that exposes the brightness of an Apple Studio Display or
  Studio Display XDR as a standard /sys/class/backlight device, attached to
