@@ -16,16 +16,17 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          driver = pkgs.linuxPackages.callPackage ./nix/package.nix { };
+          driver = pkgs.linuxPackages.callPackage ./packaging/nix/package.nix { };
         in
         {
           default = driver;
           hid-apple-studio-display = driver;
-          tools = pkgs.callPackage ./nix/tools.nix { };
+          tools = pkgs.callPackage ./packaging/nix/tools.nix { };
+          sensor-proxy = pkgs.callPackage ./packaging/nix/sensor-proxy.nix { };
         }
       );
 
-      nixosModules.default = import ./nix/module.nix;
+      nixosModules.default = import ./packaging/nix/module.nix;
 
       checks = forAllSystems (
         system:
@@ -35,13 +36,14 @@
         {
           driver = self.packages.${system}.default;
           tools = self.packages.${system}.tools;
-          module = import ./nix/module-check.nix {
+          sensor-proxy = self.packages.${system}.sensor-proxy;
+          module = import ./packaging/nix/module-check.nix {
             inherit nixpkgs pkgs;
             module = self.nixosModules.default;
           };
         }
       );
 
-      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
+      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-tree);
     };
 }

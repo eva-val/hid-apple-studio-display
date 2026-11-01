@@ -54,7 +54,7 @@ class InventoryTests(unittest.TestCase):
             self.assertIsNone(detect.single_pair({
                 "usb": [{"serial": serial}], "video": [{"serial": edid}]}))
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(detect.inventory(Path(tmp)), {"usb": [], "video": []})
+            self.assertEqual(detect.inventory(Path(tmp)), {"usb": [], "video": [], "displays": []})
 
 
 if __name__ == "__main__":

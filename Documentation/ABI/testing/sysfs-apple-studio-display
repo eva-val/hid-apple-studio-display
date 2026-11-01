@@ -1,0 +1,29 @@
+What:           /sys/class/backlight/apple_studio_display*/physical_device
+What:           /sys/bus/iio/devices/iio:device*/physical_device
+Date:           November 2026
+Contact:        https://github.com/eva-val/hid-apple-studio-display/issues
+Description:
+                Read-only symlink to the physical USB device belonging to an
+                Apple Studio Display. The IIO link is provided on devices named
+                apple_studio_display_orientation, owned by this driver.
+
+                Backlight and orientation devices for the same physical display
+                resolve this link to the same canonical sysfs directory. That
+                directory supplies standard USB identity attributes (idVendor,
+                idProduct and serial) and contains the display's HID interfaces.
+                Ambient-light IIO devices supplied by hid-sensor-als are already
+                descendants of this USB device; this driver does not take them
+                over or change their ABI. Walk their device ancestry to associate
+                them with the same physical display.
+
+                The backlight's parent remains its DRM connector when matched,
+                independently of this physical identity. A backlight registered
+                without a DRM match still links to its physical USB device.
+                No ordering of backlight or IIO device numbers is implied.
+
+                The links exist for the registered class devices' lifetime and
+                are removed on driver unbind or USB disconnect. Device numbers
+                and paths can change after reconnecting; enumerate again and
+                use the USB serial when a persistent user preference is needed.
+                These links carry identity only, with no desktop policy or
+                requirement to run any userspace service.

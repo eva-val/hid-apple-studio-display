@@ -1,15 +1,17 @@
 #!/bin/sh
-# Prints "rear" or "front" for one of the Apple Studio Display's two ambient
-# light IIO devices, given its sysfs devpath. The display enumerates the rear
+# Prints "single", "rear" or "front" for an Apple Studio Display ambient
+# light IIO device, given its sysfs devpath. Dual-sensor displays enumerate the rear
 # sensor's HID collection before the front one, so the lower-numbered
 # platform device under the same HID interface is the rear sensor.
 set -u
-dev=/sys${1:?devpath}
+dev=${ASD_SYSFS_ROOT:-/sys}${1:?devpath}
 platform=$(basename "$(readlink -f "$dev/..")")
 hid=$(readlink -f "$dev/../..")
 first=
+count=0
 for d in "$hid"/HID-SENSOR-200041.*; do
 	[ -e "$d" ] || continue
+	count=$((count + 1))
 	n=${d##*/HID-SENSOR-200041.}
 	n=${n%%.*}
 	if [ -z "$first" ] || [ "$n" -lt "$first_n" ]; then
@@ -17,4 +19,12 @@ for d in "$hid"/HID-SENSOR-200041.*; do
 		first_n=$n
 	fi
 done
-if [ "$platform" = "$first" ]; then echo rear; else echo front; fi
+if [ "$count" -eq 1 ]; then
+	echo single
+elif [ "$count" -gt 1 ] && [ "$platform" = "$first" ]; then
+	echo rear
+elif [ "$count" -gt 1 ]; then
+	echo front
+else
+	exit 1
+fi

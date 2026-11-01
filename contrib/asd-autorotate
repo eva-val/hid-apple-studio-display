@@ -15,17 +15,25 @@ readings so the defaults can be fixed.
 """
 
 import argparse
-import glob
-import os
+from collections import Counter
+from dataclasses import dataclass
+import math
+from pathlib import Path
 import sys
 import time
+
+# Source checkout / Nix libexec, then conventional distribution installation.
+sys.path[:0] = [str(Path(__file__).resolve().parent),
+                str(Path(__file__).resolve().parent.parent / "lib/hid-apple-studio-display")]
+from asd_devices import ORIENTATION_NAME, backlight_devices, iio_devices  # noqa: E402
+from asd_display_config import apply_config, read_state, rotation_config  # noqa: E402
 
 import gi
 
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
-IIO_NAME = "apple_studio_display_orientation"
+IIO_NAME = ORIENTATION_NAME
 BUS_NAME = "org.gnome.Mutter.DisplayConfig"
 OBJECT_PATH = "/org/gnome/Mutter/DisplayConfig"
 # degrees -> MetaMonitorTransform
@@ -33,30 +41,68 @@ TRANSFORMS = {0: 0, 90: 1, 180: 2, 270: 3}
 TRANSFORM_NAMES = {0: "normal", 1: "90", 2: "180", 3: "270"}
 
 
-def find_sensor():
-    for dev in glob.glob("/sys/bus/iio/devices/iio:device*"):
+@dataclass(frozen=True)
+class Sensor:
+    device: Path
+    usb: Path
+    serial: str
+
+
+@dataclass(frozen=True)
+class Display:
+    sensor: Sensor
+    backlight: Path
+    drm: Path
+
+    @property
+    def connector(self):
+        return self.drm.name.split("-", 1)[1]
+
+
+def find_sensors(sysfs=Path("/sys"), serial=None):
+    sensors = [Sensor(Path(dev["path"]), Path(dev["usb_path"]), dev["serial"])
+               for dev in iio_devices(sysfs) if dev["kind"] == "orientation"
+               and (serial is None or serial == dev["serial"])]
+    # Ambiguous sensors on one USB device (or an ambiguous --serial) are unsafe.
+    counts = Counter(sensor.usb for sensor in sensors)
+    if serial is not None and len(counts) > 1:
+        return []
+    return [sensor for sensor in sensors if counts[sensor.usb] == 1]
+
+
+def find_displays(sensors, sysfs=Path("/sys"), connector=None):
+    by_usb = {sensor.usb: sensor for sensor in sensors}
+    displays = []
+    drm_root = sysfs / "class/drm"
+    for bl in backlight_devices(sysfs):
         try:
-            with open(os.path.join(dev, "name")) as f:
-                if f.read().strip() == IIO_NAME:
-                    return dev
+            usb = Path(bl["usb_path"])
+            if usb not in by_usb or bl["connector"] is None:
+                continue
+            sensor = by_usb[usb]
+            if sensor.serial != bl["serial"]:
+                continue
+            backlight = Path(bl["path"])
+            drm = backlight.parent
+            bare_name = drm.name.split("-", 1)[1]
+            if connector is not None and connector not in {drm.name, bare_name}:
+                continue
+            # Mutter's API uses bare connector names. Never guess across GPUs.
+            if len(list(drm_root.glob(f"card*-{bare_name}"))) != 1:
+                continue
+            if (drm / "status").read_text().strip() != "connected":
+                continue
+            displays.append(Display(sensor, backlight, drm))
         except OSError:
-            pass
-    return None
-
-
-def find_connector():
-    """The driver parents its backlight to the DRM connector: card1-DP-1 -> DP-1."""
-    for bl in glob.glob("/sys/class/backlight/apple_studio_display*"):
-        parent = os.path.basename(os.path.dirname(os.path.realpath(bl)))
-        if "-" in parent:
-            return parent.split("-", 1)[1]
-    return None
+            continue
+    counts = Counter(display.sensor.usb for display in displays)
+    return [display for display in displays if counts[display.sensor.usb] == 1]
 
 
 def read_angles(dev):
     angles = []
     for axis in "xyz":
-        with open(os.path.join(dev, f"in_incli_{axis}_raw")) as f:
+        with open(dev / f"in_incli_{axis}_raw") as f:
             angles.append(int(f.read()))
     return tuple(angles)
 
@@ -79,32 +125,61 @@ class DisplayConfig:
         return None
 
     def set_transform(self, connector, transform):
-        serial, monitors, logical, _ = self._state()
-        current_mode = {}
-        for (conn, *_), modes, _ in monitors:
-            for mode_id, *_, props in modes:
-                if props.get("is-current"):
-                    current_mode[conn] = mode_id
-        new_logical = []
-        found = False
-        for x, y, scale, old, primary, mons, _ in logical:
-            conns = [m[0] for m in mons]
-            if connector in conns:
-                found = True
-                old = transform
-            new_logical.append(
-                (x, y, scale, old, primary, [(c, current_mode[c], {}) for c in conns]))
-        if not found:
-            raise RuntimeError(f"connector {connector} is not part of the current configuration")
-        # method 1: apply temporarily (not persisted to monitors.xml)
-        self.proxy.call_sync(
-            "ApplyMonitorsConfig",
-            GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, new_logical, {})),
-            Gio.DBusCallFlags.NONE, -1, None)
+        for attempt in range(2):
+            state = self._state()
+            config = rotation_config(state, connector, transform)
+            try:
+                # Mutter validates hardware constraints too. Verification does
+                # not apply anything, and the temporary apply uses the same serial.
+                apply_config(self.proxy, config, method=0)
+                apply_config(self.proxy, config)
+                return
+            except GLib.Error:
+                if attempt == 0 and self._state()[0] != state[0]:
+                    continue  # Hotplug invalidated the snapshot; rebuild once.
+                raise
 
     def _state(self):
-        return self.proxy.call_sync(
-            "GetCurrentState", None, Gio.DBusCallFlags.NONE, -1, None).unpack()
+        return read_state(self.proxy)
+
+
+class Rotator:
+    def __init__(self, config, axis="z", invert=False, offset=0):
+        self.config = config
+        self.axis = "xyz".index(axis)
+        self.invert = invert
+        self.offset = offset
+        self.pending = {}
+
+    def degrees(self, angles):
+        angle = angles[self.axis]
+        if self.invert:
+            angle = (360 - angle) % 360
+        return snap((angle + self.offset) % 360)
+
+    def poll(self, displays):
+        pending = {}
+        for display in displays:
+            try:
+                angles = read_angles(display.sensor.device)
+                degrees = self.degrees(angles)
+                # Read actual state again: docking, lid changes and compositor
+                # restarts can reset transforms without changing the sensor.
+                current = self.config.current_transform(display.connector)
+                if current is None:
+                    continue  # Disabled outputs must not be enabled by rotation.
+                previous, seen = self.pending.get(display, (None, 0))
+                seen = min(seen + 1, 2) if previous == degrees else 1
+                pending[display] = (degrees, seen)
+                transform = TRANSFORMS[degrees]
+                if seen >= 2 and transform != current:
+                    self.config.set_transform(display.connector, transform)
+                    print(f"{display.sensor.serial} {display.connector}: "
+                          f"{TRANSFORM_NAMES[transform]} (sensor {angles})", flush=True)
+            except (OSError, ValueError, GLib.Error, RuntimeError) as e:
+                print(f"{display.sensor.serial} {display.connector}: {e}", file=sys.stderr)
+        # Drop debounce state for removed, replaced, inactive or unreadable devices.
+        self.pending = pending
 
 
 def main():
@@ -115,50 +190,36 @@ def main():
     ap.add_argument("--offset", type=int, default=0,
                     help="degrees added to the reading before snapping")
     ap.add_argument("--interval", type=float, default=1.0, help="poll interval in seconds")
-    ap.add_argument("--connector", help="DRM connector of the display (default: from the backlight)")
+    ap.add_argument("--serial", help="only rotate/watch this display's USB serial (default: all)")
+    ap.add_argument("--connector", help="only rotate/watch this matched DRM connector, e.g. DP-1")
     ap.add_argument("--watch", action="store_true", help="print the readings, do not rotate")
     args = ap.parse_args()
 
-    dev = find_sensor()
-    if not dev:
-        sys.exit(f"no IIO device named {IIO_NAME}; is hid-apple-studio-display loaded and bound "
-                 "to the orientation interface (asd-bind-orientation)?")
-    connector = args.connector or find_connector()
-    if not connector and not args.watch:
-        sys.exit("could not find the display's connector; pass --connector")
-
-    config = None if args.watch else DisplayConfig()
-    applied = None if args.watch else config.current_transform(connector)
-    candidate, seen = None, 0
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        ap.error("--interval must be a finite positive number")
+    rotator = Rotator(None if args.watch else DisplayConfig(), args.axis, args.invert, args.offset)
+    waiting = False
     while True:
-        try:
-            angles = read_angles(dev)
-        except OSError as e:
-            print(f"sensor read failed: {e}", file=sys.stderr)
-            time.sleep(args.interval)
-            continue
-
-        angle = angles["xyz".index(args.axis)]
-        if args.invert:
-            angle = (360 - angle) % 360
-        degrees = snap((angle + args.offset) % 360)
-
+        sensors = find_sensors(serial=args.serial)
+        displays = find_displays(sensors, connector=args.connector)
         if args.watch:
-            print(f"x={angles[0]:3d} y={angles[1]:3d} z={angles[2]:3d}  ->  {degrees:3d}°", flush=True)
-        else:
-            # require two consecutive identical readings before acting
-            if degrees == candidate:
-                seen += 1
-            else:
-                candidate, seen = degrees, 1
-            transform = TRANSFORMS[degrees]
-            if seen >= 2 and transform != applied:
+            if args.connector:
+                sensors = [display.sensor for display in displays]
+            for sensor in sensors:
                 try:
-                    config.set_transform(connector, transform)
-                    applied = transform
-                    print(f"{connector}: {TRANSFORM_NAMES[transform]} (sensor {angles})", flush=True)
-                except (GLib.Error, RuntimeError) as e:
-                    print(f"could not apply transform: {e}", file=sys.stderr)
+                    angles = read_angles(sensor.device)
+                    print(f"{sensor.serial} {sensor.device.name}: x={angles[0]:3d} "
+                          f"y={angles[1]:3d} z={angles[2]:3d} -> "
+                          f"{rotator.degrees(angles):3d}°", flush=True)
+                except (OSError, ValueError) as e:
+                    print(f"{sensor.serial}: {e}", file=sys.stderr)
+        else:
+            rotator.poll(displays)
+        empty = not (sensors if args.watch else displays)
+        if empty and not waiting:
+            print("waiting for unambiguous Studio Display sensors and matching backlights "
+                  "(rotation requires the driver's physical_device link)", file=sys.stderr)
+        waiting = empty
         time.sleep(args.interval)
 
 

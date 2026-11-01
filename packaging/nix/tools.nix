@@ -5,6 +5,7 @@
   coreutils,
   gnugrep,
   python3,
+  systemd,
 }:
 let
   python = python3.withPackages (ps: [
@@ -15,15 +16,15 @@ in
 stdenvNoCC.mkDerivation {
   pname = "hid-apple-studio-display-tools";
   version = builtins.head (
-    builtins.match ''.*PACKAGE_VERSION="([^"]+)".*'' (builtins.readFile ../dkms.conf)
+    builtins.match ''.*PACKAGE_VERSION="([^"]+)".*'' (builtins.readFile ../../dkms.conf)
   );
 
   src = lib.fileset.toSource {
-    root = ../.;
+    root = ../../.;
     fileset = lib.fileset.unions [
-      ../contrib
-      ../tests
-      ../dkms.conf
+      ../../contrib
+      ../../tests
+      ../../dkms.conf
     ];
   };
   nativeBuildInputs = [ makeWrapper ];
@@ -32,6 +33,8 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
 
+    install -Dm644 contrib/asd_devices.py "$out/libexec/asd_devices.py"
+    install -Dm644 contrib/asd_display_config.py "$out/libexec/asd_display_config.py"
     install -Dm755 contrib/asd-als-role "$out/lib/udev/asd-als-role"
     install -Dm755 contrib/asd-bind-orientation "$out/lib/udev/asd-bind-orientation"
     for helper in asd-als-role asd-bind-orientation; do
@@ -60,7 +63,8 @@ stdenvNoCC.mkDerivation {
     install -Dm644 contrib/90-hid-apple-studio-display.rules \
       "$out/lib/udev/rules.d/90-hid-apple-studio-display.rules"
     substituteInPlace "$out/lib/udev/rules.d/90-hid-apple-studio-display.rules" \
-      --replace-fail /usr/lib/udev/ "$out/lib/udev/"
+      --replace-fail /usr/lib/udev/ "$out/lib/udev/" \
+      --replace-fail /usr/bin/udevadm "${systemd}/bin/udevadm"
 
     runHook postInstall
   '';

@@ -8,23 +8,17 @@ Keep all its video/USB cables attached. Multiple DP tiles share one EDID serial.
 import argparse
 import json
 from pathlib import Path
+import sys
 
-
-def read(path):
-    try:
-        return path.read_text().strip()
-    except OSError:
-        return ""
-
+# Source checkout / Nix libexec, then conventional distribution installation.
+sys.path[:0] = [str(Path(__file__).resolve().parent),
+                str(Path(__file__).resolve().parent.parent / "lib/hid-apple-studio-display")]
+from asd_devices import physical_displays, read  # noqa: E402
 
 def inventory(sysfs=Path("/sys")):
-    usb = []
-    for path in sorted((sysfs / "bus/usb/devices").glob("*")):
-        if (read(path / "idVendor") != "05ac"
-                or read(path / "idProduct") not in ("1114", "1116")):
-            continue
-        usb.append({"device": path.name, "serial": read(path / "serial"),
-                    "product": read(path / "product")})
+    displays = physical_displays(sysfs)
+    usb = [{key: display[key] for key in ("device", "serial", "product")}
+           for display in displays]
 
     video = []
     for path in sorted((sysfs / "class/drm").glob("card*-*")):
@@ -44,7 +38,7 @@ def inventory(sysfs=Path("/sys")):
         video.append({"connector": path.name, "name": names[0],
                       "serial": f"{int.from_bytes(edid[12:16], 'little'):08x}",
                       "enabled": read(path / "enabled") == "enabled"})
-    return {"usb": usb, "video": video}
+    return {"usb": usb, "video": video, "displays": displays}
 
 
 def single_pair(devices):
@@ -67,8 +61,17 @@ def main():
     if args.json:
         print(json.dumps(devices, indent=2))
         return
-    for device in devices["usb"]:
+    for device in devices["displays"]:
         print(f"USB {device['device']}: {device['product']} serial={device['serial']}")
+        print(f"  physical device: {device['path']}")
+        for key in ("ambient_light", "orientation"):
+            for sensor in device[key]:
+                print(f"  {sensor['kind']}: {sensor['device']} ({sensor['path']})")
+        for backlight in device["backlights"]:
+            print(f"  backlight: {backlight['device']} "
+                  f"connector={backlight['connector'] or 'unmatched'}")
+        if not device["backlights"]:
+            print("  backlight: no physical_device link found (driver upgrade may be needed)")
     for device in devices["video"]:
         state = "enabled" if device["enabled"] else "disabled"
         print(f"DRM {device['connector']}: {device['name']} "

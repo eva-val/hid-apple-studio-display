@@ -27,7 +27,8 @@ fi
 rm -f /etc/udev/rules.d/90-hid-apple-studio-display.rules /usr/lib/udev/asd-als-role /usr/lib/udev/asd-bind-orientation \
 	/usr/local/bin/asd-autorotate /usr/local/lib/systemd/user/asd-autorotate.service \
 	/usr/local/bin/asd-gnome-rescan /usr/local/lib/systemd/user/asd-gnome-rescan.service \
-	/usr/local/bin/asd-detect
+	/usr/local/bin/asd-detect /usr/local/lib/hid-apple-studio-display/asd_devices.py \
+	/usr/local/lib/hid-apple-studio-display/asd_display_config.py
 if have udevadm; then
 	udevadm control --reload 2>/dev/null || true
 fi

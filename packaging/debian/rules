@@ -16,6 +16,7 @@ override_dh_auto_install:
 	dh_install -p $(PKG) contrib/90-hid-apple-studio-display.rules usr/lib/udev/rules.d/
 	dh_install -p $(PKG) contrib/asd-als-role contrib/asd-bind-orientation usr/lib/udev/
 	dh_install -p $(PKG) contrib/asd-autorotate contrib/asd-gnome-rescan contrib/asd-detect usr/bin/
+	dh_install -p $(PKG) contrib/asd_devices.py contrib/asd_display_config.py usr/lib/hid-apple-studio-display/
 	dh_install -p $(PKG) contrib/asd-autorotate.service contrib/asd-gnome-rescan.service usr/lib/systemd/user/
 
 override_dh_dkms:

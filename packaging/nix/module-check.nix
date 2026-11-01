@@ -15,6 +15,35 @@ let
       ];
     }).config;
   disabled = evaluate { };
+  disabledWithLight = evaluate {
+    hardware.apple-studio-display.ambientLight.enable = true;
+  };
+  orientationOnly = evaluate {
+    hardware.apple-studio-display = {
+      enable = true;
+      orientation.enable = true;
+    };
+  };
+  rotationOnly = evaluate {
+    hardware.apple-studio-display = {
+      enable = true;
+      autoRotate.enable = true;
+    };
+  };
+  disabledWithRotate = evaluate {
+    hardware.apple-studio-display.autoRotate.enable = true;
+  };
+  gnomeWithoutLight = evaluate {
+    services.desktopManager.gnome.enable = true;
+    hardware.apple-studio-display.enable = true;
+  };
+  gnomeWithLight = evaluate {
+    services.desktopManager.gnome.enable = true;
+    hardware.apple-studio-display = {
+      enable = true;
+      ambientLight.enable = true;
+    };
+  };
   enabled = evaluate {
     hardware.apple-studio-display = {
       enable = true;
@@ -31,6 +60,7 @@ let
     hardware.apple-studio-display = {
       enable = true;
       ambientLight.enable = true;
+      ambientLight.preferredSerial = "preferred-display";
       autoRotate = {
         enable = true;
         extraArgs = [
@@ -44,6 +74,31 @@ let
 in
 assert disabled.boot.extraModulePackages == [ ];
 assert !(disabled.systemd.user.services ? asd-gnome-rescan);
+assert !disabled.hardware.sensor.iio.enable;
+assert !disabledWithLight.hardware.sensor.iio.enable;
+assert disabledWithLight.nixpkgs.overlays == [ ];
+assert !enabled.hardware.sensor.iio.enable;
+assert enabled.nixpkgs.overlays == [ ];
+assert !orientationOnly.hardware.sensor.iio.enable;
+assert orientationOnly.nixpkgs.overlays == [ ];
+assert !(nixpkgs.lib.hasInfix "ASD_ALS_ROLE" orientationOnly.services.udev.extraRules);
+assert !(orientationOnly.systemd.user.services ? asd-autorotate);
+assert nixpkgs.lib.hasInfix "asd-bind-orientation" orientationOnly.services.udev.extraRules;
+assert !rotationOnly.hardware.sensor.iio.enable;
+assert rotationOnly.nixpkgs.overlays == [ ];
+assert rotationOnly.hardware.apple-studio-display.orientation.enable;
+assert rotationOnly.systemd.user.services ? asd-autorotate;
+assert nixpkgs.lib.hasInfix "asd-bind-orientation" rotationOnly.services.udev.extraRules;
+assert !(nixpkgs.lib.hasInfix "ASD_ALS_ROLE" rotationOnly.services.udev.extraRules);
+assert disabledWithRotate.boot.extraModulePackages == [ ];
+assert !(disabledWithRotate.systemd.user.services ? asd-autorotate);
+assert !(nixpkgs.lib.hasInfix "asd-bind-orientation" disabledWithRotate.services.udev.extraRules);
+# GNOME may request the stock proxy for its own sensors independently of us.
+assert gnomeWithoutLight.nixpkgs.overlays == [ ];
+assert gnomeWithoutLight.hardware.sensor.iio.package.patches or [ ] == [ ];
+assert builtins.length gnomeWithLight.nixpkgs.overlays == 1;
+assert builtins.length gnomeWithLight.hardware.sensor.iio.package.patches > 0;
+assert customKernel.nixpkgs.overlays == [ ];
 assert builtins.elem "hid-apple-studio-display" enabled.boot.kernelModules;
 assert (driverFor enabled).kernel.modDirVersion == enabled.boot.kernelPackages.kernel.modDirVersion;
 assert
@@ -52,6 +107,14 @@ assert nixpkgs.lib.hasInfix "fade_ms=150 connector=DP-1" enabled.boot.extraModpr
 assert nixpkgs.lib.hasInfix "display_map=first-usb-serial:12345678,second-usb-serial:87654321"
   enabled.boot.extraModprobeConfig;
 assert !(enabled.systemd.user.services ? asd-autorotate);
+assert customKernel.hardware.sensor.iio.enable;
+assert builtins.length customKernel.hardware.sensor.iio.package.patches > 0;
+assert nixpkgs.lib.hasInfix ''ENV{ASD_ALS_ROLE}=="single|front"''
+  customKernel.services.udev.extraRules;
+assert nixpkgs.lib.hasInfix ''ATTRS{serial}=="preferred-display"''
+  customKernel.services.udev.extraRules;
+assert nixpkgs.lib.hasInfix ''ENV{IIO_SENSOR_PROXY_LIGHT_SCALE}="0.001"''
+  customKernel.services.udev.extraRules;
 assert enabled.systemd.user.services.asd-gnome-rescan.after == [ "graphical-session.target" ];
 assert enabled.systemd.user.services.asd-gnome-rescan.serviceConfig.Type == "simple";
 assert nixpkgs.lib.hasSuffix " --watch"

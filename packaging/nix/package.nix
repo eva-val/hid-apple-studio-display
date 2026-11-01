@@ -8,16 +8,16 @@
 stdenv.mkDerivation {
   pname = "hid-apple-studio-display";
   version = builtins.head (
-    builtins.match ''.*PACKAGE_VERSION="([^"]+)".*'' (builtins.readFile ../dkms.conf)
+    builtins.match ''.*PACKAGE_VERSION="([^"]+)".*'' (builtins.readFile ../../dkms.conf)
   );
 
   src = lib.fileset.toSource {
-    root = ../.;
+    root = ../../.;
     fileset = lib.fileset.unions [
-      ../Makefile
-      ../dkms.conf
-      ../hid-apple-studio-display.c
-      ../tests/connector_matching.py
+      ../../Makefile
+      ../../dkms.conf
+      ../../hid-apple-studio-display.c
+      ../../tests/connector_matching.py
     ];
   };
   nativeBuildInputs = kernel.moduleBuildDependencies;

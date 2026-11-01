@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+from display_config_fixtures import state_for
 
 loader = importlib.machinery.SourceFileLoader(
     "rescan", str(Path(__file__).resolve().parents[1] / "contrib/asd-gnome-rescan"))
@@ -132,6 +133,28 @@ class ConnectorTests(unittest.TestCase):
     def test_virtual_outputs_do_not_block(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertTrue(rescan.connectors_ready(config(), Path(tmp)))
+
+
+class RoundTripTests(unittest.TestCase):
+    def test_tv_underscanning_round_trip_keeps_settings_and_geometry(self):
+        for enabled in (True, False, None):
+            with self.subTest(underscanning=enabled):
+                props = {"color-mode": 1, "rgb-range": 3}
+                if enabled is not None:
+                    props["is-underscanning"] = enabled
+                state = state_for([("HDMI-1", 0, 0, 3840, 2160, 2., 0, True)],
+                                  properties={"HDMI-1": props})
+                proxy = Mock()
+                proxy.call_sync.return_value.unpack.return_value = state
+                current = rescan.read_config(proxy)
+                rescan.apply_config(proxy, current)
+                payload = proxy.call_sync.call_args.args[1].unpack()
+                self.assertEqual(payload[2][0][:5], (0, 0, 2., 0, True))
+                expected = {"color-mode": 1, "rgb-range": 3}
+                if enabled is not None:
+                    expected["underscanning"] = enabled
+                self.assertEqual(payload[2][0][5][0][2], expected)
+                self.assertEqual(payload[3], {"layout-mode": 1})
 
 
 if __name__ == "__main__":

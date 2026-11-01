@@ -27,40 +27,10 @@ from gi.repository import Gio, GLib  # noqa: E402
 
 BUS_NAME = "org.gnome.Mutter.DisplayConfig"
 OBJECT_PATH = "/org/gnome/Mutter/DisplayConfig"
-# monitor properties ApplyMonitorsConfig accepts, carried over as they are
-KEPT_PROPS = {"color-mode": "u", "rgb-range": "u"}
-
-
-def read_config(proxy):
-    serial, monitors, logical, props = proxy.call_sync(
-        "GetCurrentState", None, Gio.DBusCallFlags.NONE, 5000, None).unpack()
-    current = {}
-    for (conn, *_), modes, mon_props in monitors:
-        mode = next((m[0] for m in modes if m[-1].get("is-current")), None)
-        kept = {k: GLib.Variant(t, mon_props[k]) for k, t in KEPT_PROPS.items() if k in mon_props}
-        current[conn] = (mode, kept)
-
-    new_logical = []
-    for x, y, scale, transform, primary, mons, _ in logical:
-        if any(m[0] not in current or current[m[0]][0] is None for m in mons):
-            raise RuntimeError("active monitor has no current mode yet")
-        new_logical.append((x, y, scale, transform, primary,
-                            [(m[0], *current[m[0]]) for m in mons]))
-
-    config_props = {}
-    if props.get("supports-changing-layout-mode") and "layout-mode" in props:
-        config_props["layout-mode"] = GLib.Variant("u", props["layout-mode"])
-
-    return serial, new_logical, config_props
-
-
-def apply_config(proxy, config):
-    serial, logical, props = config
-    # method 1: temporary, the stored configuration stays as it is
-    proxy.call_sync(
-        "ApplyMonitorsConfig",
-        GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, logical, props)),
-        Gio.DBusCallFlags.NONE, 5000, None)
+# Source checkout / Nix libexec, then conventional distribution installation.
+sys.path[:0] = [str(Path(__file__).resolve().parent),
+                str(Path(__file__).resolve().parent.parent / "lib/hid-apple-studio-display")]
+from asd_display_config import apply_config, read_config  # noqa: E402
 
 
 def config_key(config):

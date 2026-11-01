@@ -383,6 +383,23 @@ static int asd_get_brightness(struct asd_device *asd, u32 *value)
 
 /* --- backlight class --------------------------------------------------- */
 
+/*
+ * Both HID interfaces belong to one physical USB display. Keep that identity
+ * available even for class devices whose parent describes another subsystem.
+ * The generic HID light sensors already descend from the same USB device.
+ */
+static int asd_link_physical_device(struct device *dev, struct hid_device *hdev)
+{
+	struct device *physical;
+
+	for (physical = hdev->dev.parent; physical; physical = physical->parent) {
+		if (physical->type && !strcmp(physical->type->name, "usb_device"))
+			return sysfs_create_link(&dev->kobj, &physical->kobj,
+						 "physical_device");
+	}
+	return -ENODEV;
+}
+
 static int asd_bl_update_status(struct backlight_device *bl)
 {
 	struct asd_device *asd = bl_get_data(bl);
@@ -423,6 +440,7 @@ static void asd_register_backlight(struct work_struct *work)
 	struct device *parent;
 	char name[32];
 	u32 value;
+	int ret;
 
 	mutex_lock(&asd_backlights_lock);
 	parent = asd_find_connector(asd);
@@ -449,6 +467,10 @@ static void asd_register_backlight(struct work_struct *work)
 		hid_err(hdev, "failed to register backlight: %pe\n", bl);
 		return;
 	}
+	/* Preserve the USB identity despite parenting the backlight to DRM. */
+	ret = asd_link_physical_device(&bl->dev, hdev);
+	if (ret)
+		hid_warn(hdev, "cannot link backlight to physical device: %d\n", ret);
 	asd->bl = bl;
 	list_add_tail(&asd->backlight_node, &asd_backlights);
 	mutex_unlock(&asd_backlights_lock);
@@ -571,6 +593,9 @@ static int asd_orient_probe(struct hid_device *hdev)
 		hid_hw_stop(hdev);
 		return ret;
 	}
+	ret = asd_link_physical_device(&indio_dev->dev, hdev);
+	if (ret)
+		hid_warn(hdev, "cannot link orientation to physical device: %d\n", ret);
 
 	hid_info(hdev, "orientation sensor registered as %s\n", indio_dev->name);
 	return 0;
@@ -578,7 +603,10 @@ static int asd_orient_probe(struct hid_device *hdev)
 
 static void asd_orient_remove(struct hid_device *hdev)
 {
-	iio_device_unregister(hid_get_drvdata(hdev));
+	struct iio_dev *indio_dev = hid_get_drvdata(hdev);
+
+	sysfs_remove_link(&indio_dev->dev.kobj, "physical_device");
+	iio_device_unregister(indio_dev);
 	hid_hw_stop(hdev);
 }
 
@@ -667,6 +695,7 @@ static void asd_remove(struct hid_device *hdev)
 	mutex_lock(&asd_backlights_lock);
 	if (asd->bl) {
 		list_del(&asd->backlight_node);
+		sysfs_remove_link(&asd->bl->dev.kobj, "physical_device");
 		backlight_device_unregister(asd->bl);
 	}
 	mutex_unlock(&asd_backlights_lock);
@@ -696,6 +725,7 @@ static struct hid_driver asd_driver = {
 module_hid_driver(asd_driver);
 
 MODULE_AUTHOR("Michal Jach");
+MODULE_AUTHOR("Stephanie Howanietz");
 MODULE_DESCRIPTION("Apple Studio Display backlight and orientation sensor driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.2.0");

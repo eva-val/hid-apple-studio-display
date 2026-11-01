@@ -104,7 +104,7 @@ nix build .#tools                 # udev rules and self-contained GNOME helpers
 nix flake check                   # build packages and check NixOS integration
 ```
 
-For a non-flake NixOS configuration, import `./nix/module.nix` from a checkout
+For a non-flake NixOS configuration, import `./packaging/nix/module.nix` from a checkout
 and set the same `hardware.apple-studio-display` options. The driver can also
 be built with `nix-build`, or with a chosen kernel package set:
 
@@ -238,22 +238,83 @@ a module reload to redo the mapping.
 
 ## Automatic brightness
 
-The display has two ambient light sensors (front and rear); the kernel's
-`hid-sensor-als` exposes both as IIO devices with illuminance, colour
-temperature and chromaticity. iio-sensor-proxy would take the rear one, so the
-installed udev rule hides it and GNOME's *Automatic Screen Brightness* follows
-the front sensor.
+Enable `hardware.apple-studio-display.ambientLight.enable = true` on NixOS.
+This installs a patched iio-sensor-proxy with ambient-light source selection and
+corrected Apple units, plus a GNOME fix to re-claim the sensor after the proxy
+restarts. Brightness and orientation still use the kernel driver; ambient light
+continues to come from the in-tree `hid-sensor-hub`/`hid-sensor-als` drivers.
 
-After installing, toggle *Settings → Power → Automatic Screen Brightness* off
-and on once (or log out and in): the installer restarts iio-sensor-proxy, and
-gnome-settings-daemon does not re-claim the light sensor on its own after
-that.
+The 2022 display tested here exposes **one** ALS. Some models expose two, front
+and rear. The helper keeps a sole sensor and hides the rear only when there are
+multiple ALS collections on the same HID interface. Sensors on other displays
+are counted separately. Sibling rules are refreshed after enumeration.
 
-How GNOME applies it: the brightness slider acts as a **bias** on the
-automatic target (`clamp(auto + slider − 0.5)`), and the reference light level
-is re-normalised whenever you move the slider. So set the slider to where you
-like it *now*, and the display tracks the room from there; at 100 % it can
-only ever stay at maximum.
+GNOME and SensorProxy expose **one shared ambient-light reading**, not one per
+monitor. The selection policy is:
+
+| Setup | Ambient-light source |
+|---|---|
+| Desktop, one Studio Display | Its sole/front sensor |
+| Desktop, multiple Studio Displays | Preferred display if configured; otherwise retain the current eligible display, with deterministic selection at startup |
+| Laptop open, Studio Display attached | Display sensor; laptop ALS remains available as a fallback |
+| Laptop closed, Studio Display attached | Display sensor, avoiding the covered laptop ALS |
+| Undock/remove the selected display | Another display sensor, then the laptop ALS |
+| Remove the last sensor, then reconnect | Report unavailable, retain subscriptions, and resume on reconnection |
+| Laptop alone | Its built-in sensor, with its normal units |
+
+Choose a particular display's sensor with its USB serial:
+
+```nix
+hardware.apple-studio-display.ambientLight = {
+  enable = true;
+  preferredSerial = "YOUR-USB-SERIAL"; # optional with multiple displays
+};
+```
+
+A source stays selected across equal-priority hotplugs to avoid oscillation.
+Preference is based on attached sensors, not GNOME's primary monitor or whether
+its video output is enabled. A USB-connected display can still supply room-light
+readings while its video output is disabled. Independent per-monitor ambient
+readings would require a different desktop API; manual per-display brightness
+controls remain independent.
+
+The tested Apple HID illuminance field uses unit `0x010000e1` and exponent `-3`.
+Linux's scale lookup does not recognize that unit and exports scale `1`, so the
+raw millilux count is mislabeled as lux. The proxy's udev override uses scale
+`0.001`: raw `24000` becomes `24 lux`. It first removes the kernel-reported
+scale, so a future kernel fix does not apply the correction twice. This fixes
+the reported units; it does not calibrate the sensor against a light meter.
+
+Verify after activating the configuration:
+
+```sh
+monitor-sensor --light
+busctl get-property net.hadess.SensorProxy /net/hadess/SensorProxy net.hadess.SensorProxy LightLevel
+```
+
+`monitor-sensor` claims the light sensor and keeps the D-Bus connection open;
+reading `LightLevel` alone does not start measurements. GNOME's Automatic Screen
+Brightness setting must also be enabled. Cover/uncover the **display** sensor
+and confirm that readings change, then test docking and undocking. A closed
+laptop sensor can legitimately read zero, but that is not the room reading.
+
+Outside NixOS, the udev rules preserve a sole sensor but stock iio-sensor-proxy
+ignores the priority/scale properties. Apply
+`patches/iio-sensor-proxy-ambient-light.patch` to iio-sensor-proxy 3.9 and the
+GNOME restart fix in `patches/gnome-settings-daemon-reclaim-light.patch` to GNOME
+Settings Daemon 50.1, or use distribution packages carrying equivalent fixes.
+Without the GNOME restart fix, toggle automatic brightness off/on or restart
+`org.gnome.SettingsDaemon.Power.service` after restarting the proxy.
+
+The proxy patch includes D-Bus integration tests for desktop/laptop startup,
+multiple displays, hotplug priority, fallback, reconnection, rule changes and
+unit conversion. Two upstream Qualcomm SSC tests need QRTR hardware unavailable
+in the Nix sandbox and are excluded; the other upstream tests run too. Physical
+multi-display and lid transitions still need validation on real hardware.
+
+GNOME treats its slider as a bias on the automatic target and re-normalizes
+when the user adjusts brightness. It uses relative ambient changes, so a units
+fix alone would not solve the wrong-sensor/zero-reading problem.
 
 ## Auto-rotate (experimental)
 
@@ -263,14 +324,55 @@ The orientation interface is claimed by this driver (udev rebinds it from
 with `in_incli_{x,y,z}_raw` in degrees. An upright display reads 0/0/0.
 
 GNOME only auto-rotates a laptop's built-in panel, so `asd-autorotate` polls
-the sensor and applies the transform to the display's connector through
+each display's sensor and applies the transform to its connector through
 mutter's DisplayConfig API (temporary configuration, nothing is written to
 `monitors.xml`):
 
 ```sh
 asd-autorotate --watch                       # print readings while you turn the display
+asd-autorotate --serial USB_SERIAL --watch   # inspect one physical display
 systemctl --user enable --now asd-autorotate # run it for the session
 ```
+
+The helper pairs each orientation sensor with a backlight belonging to the
+same physical USB device. The driver exposes that association as the
+backlight's `physical_device` symlink, while its parent identifies the DRM connector.
+Install the updated driver together with the helper; older drivers without
+this link can still be inspected with `--watch`, but will not be auto-rotated.
+For multiple displays, configure `displayMap` so each backlight has the correct
+DRM parent. By default all unambiguously matched displays rotate independently;
+`--serial` and `--connector` restrict that selection. `--connector` filters an
+existing match and cannot assign an unrelated sensor to an output.
+
+Discovery repeats on each poll, including when no display is connected at
+startup. Unplugging, replugging and IIO device renumbering discard stale state;
+each new pairing requires two consecutive matching readings. Disabled outputs
+stay disabled, and the laptop panel is left alone whether its lid is open or
+closed. Mirrored outputs, multiple sensors on one display, and connector names
+that are ambiguous across GPUs are skipped rather than rotated together.
+
+Rotation recalculates monitor positions to retain existing edge contacts and
+top/left, bottom/right, or center alignment. This accounts for each monitor's
+mode, scale, and the compositor's logical or physical layout mode. Neighbors
+move when the rotated display changes size; their modes, scales, transforms,
+and primary status stay intact. Conflicting grids or layouts that would overlap
+are rejected with a diagnostic. Mutter verifies the proposed configuration
+before it is applied temporarily; a stale configuration is read and rebuilt
+once if a hotplug races the operation.
+
+Both rotation and the brightness rescan preserve supported current color mode,
+RGB range, underscanning, layout mode, and monitor leases. Rescanning keeps the
+existing positions and transforms as well.
+
+Physical identity is independent of GNOME. The backlight and orientation IIO
+device expose `physical_device` links to the same USB device; the standard HID
+ambient-light IIO devices already descend from that device. `asd-detect` shows
+brightness, ambient light (including both sensors on dual-sensor models), and
+orientation grouped under each physical display. `asd-detect --json` adds a
+`displays` list with their sysfs paths; the existing `usb` and `video` lists
+remain available for mapping diagnostics. Enumeration reads metadata only.
+The kernel contract is documented in
+[the sysfs ABI](Documentation/ABI/testing/sysfs-apple-studio-display).
 
 **Only the landscape reading has been observed so far.** The helper assumes
 the Z angle is the rotation about the screen's normal and snaps it to quarter
@@ -328,8 +430,9 @@ through this control. Requests wake the (autosuspended) display first.
 - The orientation sensor's readings for a rotated display are unconfirmed
   (see *Auto-rotate*). It is also unknown whether the display pushes a report
   when turned; the helper polls instead.
-- `hid-sensor-als` reports the light sensors' milli-lux values as lux
-  (1000× too high). Harmless for GNOME, which works relatively.
+- The kernel still exposes Apple's incorrect ALS scale; the optional patched
+  SensorProxy corrects the value presented to GNOME. Other IIO consumers need
+  the same correction or an upstream kernel fix.
 - Finding the connector walks the device tree (PCI display controller →
   `drm/cardN` → connector). Non-PCI GPUs are not handled, even with an override.
 - Multiple Studio Displays require the one-time USB/EDID pairing above. Fully
@@ -345,6 +448,25 @@ compiles it against each supported LTS kernel plus current stable, runs
 checkpatch, and builds the Debian package. Please keep `checkpatch.pl --strict`
 clean and bump the version in `dkms.conf`, `MODULE_VERSION`, the PKGBUILD, the
 spec and `debian/changelog` together (CI checks they agree).
+
+`nix flake check` runs helper regression tests, including layout geometry and
+monitor-property round trips. To verify against Mutter itself, use Python with
+PyGObject and `dbus-run-session` available, then run:
+
+```sh
+python3 tests/mutter_integration.py --mutter /path/to/mutter
+```
+
+This starts a private headless compositor with two virtual outputs, temporary
+settings and a separate D-Bus session. It checks that Mutter rejects the
+original disconnected layout and accepts rotation, reversal and rescan in
+horizontal, vertical and (where supported) physical layouts.
+
+Contributors:
+
+- Michal Jach — original driver and desktop integration.
+- Stephanie Howanietz — multi-display detection, physical device associations,
+  sensor integration, and NixOS packaging.
 
 ## License
 

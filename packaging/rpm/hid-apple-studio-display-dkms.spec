@@ -43,6 +43,8 @@ install -D -m 0755 contrib/asd-bind-orientation %{buildroot}%{udevdir}/asd-bind-
 install -D -m 0755 contrib/asd-autorotate %{buildroot}%{_bindir}/asd-autorotate
 install -D -m 0644 contrib/asd-autorotate.service %{buildroot}%{_userunitdir}/asd-autorotate.service
 install -D -m 0755 contrib/asd-detect %{buildroot}%{_bindir}/asd-detect
+install -D -m 0644 contrib/asd_devices.py %{buildroot}%{_prefix}/lib/hid-apple-studio-display/asd_devices.py
+install -D -m 0644 contrib/asd_display_config.py %{buildroot}%{_prefix}/lib/hid-apple-studio-display/asd_display_config.py
 install -D -m 0755 contrib/asd-gnome-rescan %{buildroot}%{_bindir}/asd-gnome-rescan
 install -D -m 0644 contrib/asd-gnome-rescan.service %{buildroot}%{_userunitdir}/asd-gnome-rescan.service
 
@@ -69,6 +71,7 @@ fi
 %{_userunitdir}/asd-autorotate.service
 %{_bindir}/asd-gnome-rescan
 %{_bindir}/asd-detect
+%{_prefix}/lib/hid-apple-studio-display/
 %{_userunitdir}/asd-gnome-rescan.service
 
 %changelog
